@@ -1,6 +1,6 @@
 object MainForm: TMainForm
-  Left = 340
-  Top = 307
+  Left = 296
+  Top = 283
   Width = 841
   Height = 552
   Caption = 'Vortex Tracker II'
@@ -2313,5 +2313,13 @@ object MainForm: TMainForm
       Checked = True
       OnClick = PopupMenu3Click
     end
+  end
+  object midiin1: TMidiInput
+    ProductName = 'nanoKEY'
+    SysexBufferSize = 4096
+    FilteredMessages = [msgActiveSensing, msgMidiTimeCode]
+    OnMidiInput = midiin1MidiInput
+    Left = 8
+    Top = 264
   end
 end

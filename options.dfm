@@ -17,7 +17,7 @@ object Form1: TForm1
   object OpsPages: TPageControl
     Left = 0
     Top = 0
-    Width = 524
+    Width = 516
     Height = 489
     ActivePage = AYEmu
     Align = alTop
@@ -414,9 +414,9 @@ object Form1: TForm1
       Caption = 'Wave out'
       ImageIndex = 4
       object SpeedButton1: TSpeedButton
-        Left = 296
-        Top = 240
-        Width = 55
+        Left = 280
+        Top = 120
+        Width = 81
         Height = 22
         Action = MainForm.Stop1
         Glyph.Data = {
@@ -449,11 +449,29 @@ object Form1: TForm1
       end
       object grp1: TGroupBox
         Left = 168
-        Top = 128
+        Top = 152
         Width = 193
-        Height = 81
+        Height = 105
         Caption = 'MIDI'
         TabOrder = 6
+        object midibtn1: TButton
+          Left = 104
+          Top = 56
+          Width = 81
+          Height = 25
+          Caption = 'Next Device'
+          TabOrder = 0
+          OnClick = midibtn1Click
+        end
+        object midibtn2: TButton
+          Left = 8
+          Top = 56
+          Width = 89
+          Height = 25
+          Caption = 'Previous Device'
+          TabOrder = 1
+          OnClick = midibtn2Click
+        end
       end
       object SR: TRadioGroup
         Left = 8
@@ -604,20 +622,29 @@ object Form1: TForm1
           Width = 177
           Height = 21
           Style = csDropDownList
-          ItemHeight = 0
+          ItemHeight = 13
           TabOrder = 2
           Visible = False
           OnChange = ComboBox1Change
         end
       end
       object cmbInput: TComboBox
-        Left = 184
-        Top = 152
-        Width = 161
+        Left = 176
+        Top = 176
+        Width = 177
         Height = 21
-        ItemHeight = 0
+        ItemHeight = 13
         TabOrder = 5
         Text = 'cmbInput'
+      end
+      object midibtn3: TButton
+        Left = 272
+        Top = 264
+        Width = 81
+        Height = 25
+        Caption = 'Stop MIDI'
+        TabOrder = 7
+        OnClick = midibtn3Click
       end
     end
     object OtherOps: TTabSheet

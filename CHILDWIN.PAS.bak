@@ -11,7 +11,7 @@ unit Childwin;
 interface
 
 uses Windows, Messages, Types, Classes, Graphics, Forms, Controls, StdCtrls,
-SysUtils,
+  SysUtils,
   trfuncs, ComCtrls, WaveOutAPI, Grids, Menus, MMSystem, AY, Buttons,
   ExtCtrls, Dialogs;
 
@@ -71,6 +71,9 @@ type
     ShownFrom, NOfLines: integer;
     ShownSample: PSample;
     BigCaret: integer;
+    isSelecting :Boolean;
+    selStart, selEnd: Integer;
+    isLineTesting:bool;
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure RedrawSamples(DC: HDC);
@@ -84,6 +87,11 @@ type
     CursorX, CursorY {,SelW,SelH}: integer;
     ShownFrom, NOfLines: integer;
     ShownOrnament: POrnament;
+
+    isSelecting: Boolean;
+    selStart, selEnd: Integer;
+    isLineTesting:bool;
+
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure RedrawOrnaments(DC: HDC);
@@ -98,11 +106,11 @@ type
     CAChangeSampleSize, CAChangeSampleLoop, CAChangeOrnamentSize,
     CAChangeOrnamentLoop, CAChangeOrnamentValue, CAChangeSampleValue,
     CAInsertPosition, CADeletePosition, CAChangePositionListLoop,
-      CAChangePositionValue,
+    CAChangePositionValue,
     CAChangeToneTable, CAChangeFeatures, CAChangeHeader, CAChangeAuthor,
-      CAChangeTitle,
+    CAChangeTitle,
     CAPatternInsertLine, CAPatternDeleteLine, CAPatternClearLine,
-      CAPatternClearSelection,
+    CAPatternClearSelection,
     CATransposePattern, CATracksManagerCopy, CAExpandCompressPattern);
 
   TChangeParams = record
@@ -276,6 +284,13 @@ type
     UpDown3: TUpDown;
     Label3: TLabel;
     chk1: TCheckBox;
+    edtBPM: TEdit;
+    procedure OrnamentsMidiNoteOn(note:Byte);
+    procedure OrnamentsMidiNoteOff(note:Byte);
+    procedure SamplesMidiNoteOn(note:Byte);
+    procedure SamplesMidiNoteOff(note:Byte);
+    procedure TracksMidiNoteOn(note:Byte);
+    procedure TracksMidiNoteOff(note:Byte);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure FormCreate(Sender: TObject);
     procedure TracksMoveCursorMouse(X, Y: integer; Sel, Mv, ButRight: boolean);
@@ -283,7 +298,11 @@ type
       Shift: TShiftState);
     procedure SamplesKeyDown(Sender: TObject; var Key: Word;
       Shift: TShiftState);
+    procedure SamplesKeyUp(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
     procedure OrnamentsKeyDown(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+    procedure OrnamentsKeyUp(Sender: TObject; var Key: Word;
       Shift: TShiftState);
     procedure TracksMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
@@ -480,7 +499,7 @@ type
     VTMP: PModule;
     PatNum, SamNum, OrnNum: integer;
     SongChanged: boolean;
-    ShowEnvelopeAsNote:Boolean;
+    ShowEnvelopeAsNote: Boolean;
     InputPNumber, PositionNumber,
       PosBegin, PosDelay, TotInts, LineInts: integer;
     xc, xt, xn, xe: array[0..2] of integer;
@@ -504,6 +523,7 @@ var
 
 implementation
 
+
 uses Main, options, ShellApi, selectts, TglSams, GlbTrn, TrkMng;
 
 {$R *.DFM}
@@ -526,19 +546,18 @@ FreeVTMP(VTMP);
 inherited;
 end;}
 
-
 procedure TMDIChild.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
-  {
+  //?
   if IsPlaying and ((PlayingWindow[1] = Self) or
-       ((NumberOfSoundChips > 1) and (PlayingWindow[2] = Self))) then
-   begin
+    ((NumberOfSoundChips > 1) and (PlayingWindow[2] = Self))) then
+  begin
     StopPlaying;
     MainForm.RestoreControls;
-   end;
+  end;
   MainForm.DeleteWindowListItem(Self);
   MainForm.Caption := 'Vortex Tracker II';
-  }
+  //?
   VTMP := nil;
   Action := caFree;
 end;
@@ -857,6 +876,7 @@ begin
   Samples.ClientWidth := Samples.CelW * 40;
   Samples.ClientHeight := Samples.CelH * Samples.NOfLines;
   Samples.OnKeyDown := SamplesKeyDown;
+  Samples.OnKeyUp := SamplesKeyUp;  
   Samples.OnMouseDown := SamplesMouseDown;
   Samples.OnMouseMove := SamplesMouseMove;
   Samples.OnMouseWheelUp := SamplesMouseWheelUp;
@@ -906,6 +926,7 @@ begin
   SpeedButton21.Left := i;
   GroupBox5.Left := SpeedButton19.Left + SpeedButton19.Width + Ornaments.Left;
   Ornaments.OnKeyDown := OrnamentsKeyDown;
+  Ornaments.OnKeyUp := OrnamentsKeyUp;
   Ornaments.OnMouseDown := OrnamentsMouseDown;
 end;
 
@@ -1142,6 +1163,7 @@ end;
 
 
 //перерисовка
+
 procedure TTracks.RedrawTracks;
 var
   i, n, From, i1, k: integer;
@@ -1251,6 +1273,8 @@ begin
 end;
 
 procedure TSamples.RedrawSamples;
+const
+  loopstring:String = '|';
 var
   i, k, len, lp: integer;
   DC1: HDC;
@@ -1276,12 +1300,52 @@ begin
   k := 0;
   for i := ShownFrom to ShownFrom + NOfLines - 1 do
   begin
+
     if i >= len then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
-      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT))
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+
+      loopstring:='|';
     end
     else if i >= lp then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
+      SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT));
+
+      loopstring:=']';
+    end
+    else
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_WINDOWTEXT));
+
+      loopstring:='|';
+    end;
+
+    if i = lp then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
+      SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT));
+
+      loopstring:=']';
+    end
+    else if i = len then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+
+      loopstring:='|';
+    end;
+
+    if isSelecting then
+    begin
+    if i >= selEnd then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+    end
+    else if i >= selStart then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
       SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT))
@@ -1292,29 +1356,30 @@ begin
       SetTextColor(DC1, GetSysColor(COLOR_WINDOWTEXT))
     end;
 
-    if i = lp then
+    if i = selStart then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
       SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT))
     end
-    else if i = len then
+    else if i = selEnd then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
       SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT))
     end;
+    end;
 
-    if  MainForm.MDIChildCount <> 0 then
-      if ((i mod TMDIChild(MainForm.ActiveMDIChild).VTMP.Initial_Delay )= 0) and (i <=len )then SetBkColor(DC1, GetSysColor(COLOR_ACTIVECAPTION));
+    if MainForm.MDIChildCount <> 0 then
+      if ((i mod TMDIChild(MainForm.ActiveMDIChild).VTMP.Initial_Delay) = 0) and (i < len) and MainForm.Saved_HighlightSpeed then SetBkColor(DC1, GetSysColor(COLOR_ACTIVECAPTION));
 
     if MainForm.Saved_DecBase then
     begin
-    s := Format('%.2d', [i mod 100]) + '|';
-    if i = 100 then s := '@1|';
-    if i = 200 then s := '@2|';
+      s := Format('%.2d', [i mod 100]) + loopstring;
+      if i = 100 then s := '@1' + loopstring;
+      if i = 200 then s := '@2' + loopstring;
     end
     else
     begin
-    s  := IntToHex(i,2) + '|';
+      s := IntToHex(i, 2) + loopstring;
     end;
 
     if ShownSample = nil then
@@ -1337,9 +1402,13 @@ begin
 end;
 
 procedure TOrnaments.RedrawOrnaments;
+const
+  loopstring:String = '|';
+
 var
   i, len, lp, x, y: integer;
   DC1: HDC;
+
   s: string;
   p: THANDLE;
 begin
@@ -1366,9 +1435,48 @@ begin
     if i >= len then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
-      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT))
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+
+      loopstring:='|';
     end
     else if i >= lp then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
+      SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT));
+
+      loopstring:=']';
+    end
+    else
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_WINDOWTEXT));
+
+      loopstring:='|';
+    end;
+
+    if i = lp then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
+      SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT));
+
+      loopstring:=']';
+    end
+    else if i = len then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+
+      loopstring:='|';
+    end;
+
+    if isSelecting then
+    begin
+    if i >= selEnd then
+    begin
+      SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
+      SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT));
+    end
+    else if i >= selStart then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
       SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT))
@@ -1379,31 +1487,30 @@ begin
       SetTextColor(DC1, GetSysColor(COLOR_WINDOWTEXT))
     end;
 
-
-    if i = lp then
+    if i = selStart then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_HIGHLIGHT));
       SetTextColor(DC1, GetSysColor(COLOR_HIGHLIGHTTEXT))
     end
-    else if i = len then
+    else if i = selEnd then
     begin
       SetBkColor(DC1, GetSysColor(COLOR_WINDOW));
       SetTextColor(DC1, GetSysColor(COLOR_GRAYTEXT))
     end;
+    end;
 
-    if  MainForm.MDIChildCount <> 0 then
-      if ((i mod TMDIChild(MainForm.ActiveMDIChild).VTMP.Initial_Delay )= 0) and (i <=len )then SetBkColor(DC1, GetSysColor(COLOR_ACTIVECAPTION));
-
+    if MainForm.MDIChildCount <> 0 then
+      if ((i mod TMDIChild(MainForm.ActiveMDIChild).VTMP.Initial_Delay) = 0) and (i < len) and MainForm.Saved_HighlightSpeed then SetBkColor(DC1, GetSysColor(COLOR_ACTIVECAPTION));
 
     if MainForm.Saved_DecBase then
     begin
-    s := Format('%.2d', [i mod 100]) + '|';
-    if i = 100 then s := '@1|';
-    if i = 200 then s := '@2|';
+      s := Format('%.2d', [i mod 100]) + loopstring;
+      if i = 100 then s := '@1' + loopstring;
+      if i = 200 then s := '@2' + loopstring;
     end
     else
     begin
-    s := IntToHex(i,2) + '|';
+      s := IntToHex(i, 2) + loopstring;
     end;
     //s := IntToHex(i, 2) + '|';
 
@@ -1434,15 +1541,16 @@ end;
 
 const
   ColTabs: array[0..11] of integer =
-    (0, 5, 8, 12, 17, 22, 26, 31, 36, 40, 45, 49);
+  (0, 5, 8, 12, 17, 22, 26, 31, 36, 40, 45, 49);
   SColTabs: array[0..6] of integer =
-    (0, 5, 11, 14, 19, 20, 21);
+  (0, 5, 11, 14, 19, 20, 21);
   NoteTabs: array[0..2] of integer =
-    (8, 22, 36);
+  (8, 22, 36);
   NotePoses = [8, 22, 36];
+  ChanPoses = [8,12..20, 22,26..34, 36,40..48];  
   EnvelopePoses = [0..3];
   SamTabs: array[0..2] of integer =
-    (12, 26, 40);
+  (12, 26, 40);
   SamPoses = [12, 26, 40];
 
 function ColTab(i: integer): integer;
@@ -1738,8 +1846,135 @@ begin
   end;
 end;
 
-{Tracks MIDI In}
+procedure TMDIChild.OrnamentsMidiNoteOn(note:Byte);
+begin
+    Ornaments.isLineTesting:= True;
+    OrnamentTestLine.KeyPressed:=0;
+    OrnamentTestLine.CursorX:=8;
 
+    if
+      TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note
+      >= 0 then
+     if not IsPlaying or (PlayMode = PMPlayLine) then
+        PlVars[1].ParamsOfChan[MidChan].Note :=
+          TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note;
+    TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note
+      := Note;
+    TMDIChild(OrnamentTestLine.ParWind).DoAutoEnv(-1, Ord(OrnamentTestLine.TestSample), 0);
+    HideCaret(Handle);
+    OrnamentTestLine.RedrawTestLine(0);
+    ShowCaret(Handle);
+    TMDIChild(OrnamentTestLine.ParWind).RestartPlayingLine(-Ord(OrnamentTestLine.TestSample) - 1)
+end;
+procedure TMDIChild.OrnamentsMidiNoteOff(note:Byte);
+begin
+      OrnamentTestLine.TestLineExit(Self);
+      Ornaments.isLineTesting:= False;
+end;
+procedure TMDIChild.SamplesMidiNoteOn(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+    Samples.isLineTesting:= True;
+    SampleTestLine.KeyPressed:=0;
+    SampleTestLine.CursorX:=8;
+
+    if
+      TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note
+      >= 0 then
+      if not IsPlaying or (PlayMode = PMPlayLine) then
+        PlVars[1].ParamsOfChan[MidChan].Note :=
+          TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note;
+    TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note
+      := Note;
+    TMDIChild(SampleTestLine.ParWind).DoAutoEnv(-1, Ord(SampleTestLine.TestSample), 0);
+    HideCaret(Handle);
+    SampleTestLine.RedrawTestLine(0);
+    ShowCaret(Handle);
+    TMDIChild(SampleTestLine.ParWind).RestartPlayingLine(-Ord(SampleTestLine.TestSample) - 1)
+//  end;
+end;
+
+procedure TMDIChild.SamplesMidiNoteOff(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+      SampleTestLine.TestLineExit(Self);
+      Samples.isLineTesting:= False;
+//  end;
+end;
+
+procedure TMDIChild.TracksMidiNoteOn(note:Byte);
+var
+  i,j, n, y,e,old:Integer;
+begin
+  if (note < 0) or (note > 96) then Exit;
+  if Tracks.CursorX in ChanPoses then
+  begin
+    ValidatePattern2(PatNum);
+    i := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
+    if (i >= 0) and (i < Tracks.ShownPattern.Length) then
+    begin
+//    RemSel;
+      j := MainForm.ChanAlloc[(Tracks.CursorX - 8) div 14];
+      ChangeNote(PatNum, i, j, Note);
+      DoAutoEnv(PatNum, i, j);
+      HideCaret(Tracks.Handle);
+      if DoStep(i, True) then
+        ShowStat;
+      Tracks.RedrawTracks(0);
+      ShowCaret(Tracks.Handle);
+      RestartPlayingLine(i);
+    end;
+
+  end;
+  if Tracks.CursorX in EnvelopePoses then
+  begin
+    n := Note;
+    if n < 0 then
+      exit;
+    ValidatePattern2(PatNum);
+    y := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
+
+    if (y >= 0) and (y < Tracks.ShownPattern.Length) then
+      e := round(GetNoteFreq(VTMP.Ton_Table, n) * AutoEnv0 / AutoEnv1 / 16);
+    begin
+      old := VTMP.Patterns[PatNum].Items[y].Envelope;
+      if not UndoWorking then
+      begin
+        AddUndo(CAChangeEnvelopePeriod, old, e);
+        ChangeList[ChangeCount - 1].Line := y;
+      end;
+      VTMP.Patterns[PatNum].Items[y].Envelope := e;
+      SongChanged := True;
+//    RemSel;
+//    Tracks.KeyPressed := Key;
+      HideCaret(Tracks.Handle);
+      if DoStep(y, True) then
+        ShowStat;
+      Tracks.RedrawTracks(0);
+      ShowCaret(Tracks.Handle);
+      RestartPlayingLine(y);
+    end;
+
+  end;
+end;
+
+procedure TMDIChild.TracksMidiNoteOff(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+    if IsPlaying and (PlayMode in [PMPlayLine, PMPlayPattern]) and
+      (PlayingWindow[1] = Self) then
+    begin
+      ResetPlaying;
+      PlayMode := PMPlayLine
+    end;
+    Tracks.KeyPressed := 0;
+//  end;
+end;
+
+{Tracks MIDI In}
 procedure TMDIChild.TracksKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 
@@ -1804,15 +2039,15 @@ procedure TMDIChild.TracksKeyDown(Sender: TObject; var Key: Word;
     y := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
 
     if (y >= 0) and (y < Tracks.ShownPattern.Length) then
-        e := round(GetNoteFreq(VTMP.Ton_Table, n) * AutoEnv0 / AutoEnv1 / 16);
+      e := round(GetNoteFreq(VTMP.Ton_Table, n) * AutoEnv0 / AutoEnv1 / 16);
     begin
-    old := VTMP.Patterns[PatNum].Items[y].Envelope;
-    if not UndoWorking then
-    begin
-      AddUndo(CAChangeEnvelopePeriod, old, e);
-      ChangeList[ChangeCount - 1].Line := y;
-    end;
-    VTMP.Patterns[PatNum].Items[y].Envelope := e;
+      old := VTMP.Patterns[PatNum].Items[y].Envelope;
+      if not UndoWorking then
+      begin
+        AddUndo(CAChangeEnvelopePeriod, old, e);
+        ChangeList[ChangeCount - 1].Line := y;
+      end;
+      VTMP.Patterns[PatNum].Items[y].Envelope := e;
       SongChanged := True;
       RemSel;
       Tracks.KeyPressed := Key;
@@ -2249,27 +2484,27 @@ begin
       else if (ssShift in Shift) then
       begin
       end
-      else }if (ssCtrl in Shift) then
+      else } if (ssCtrl in Shift) then
       begin
         if Tracks.ShownPattern = nil then
           PLen := DefPatLen
         else
           PLen := Tracks.ShownPattern.Length;
 
-          Tracks.ShownFrom := PLen - 1;
-          Tracks.CursorY := Tracks.N1OfLines;
-          if not (ssShift in Shift) then
-            Tracks.RemoveSelection(0, True);
-          HideCaret(Tracks.Handle);
-          Tracks.RedrawTracks(0);
-          SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
-            Tracks.CelH * Tracks.CursorY);
-          ShowCaret(Tracks.Handle);
-          ShowStat;
+        Tracks.ShownFrom := PLen - 1;
+        Tracks.CursorY := Tracks.N1OfLines;
+        if not (ssShift in Shift) then
+          Tracks.RemoveSelection(0, True);
+        HideCaret(Tracks.Handle);
+        Tracks.RedrawTracks(0);
+        SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
+          Tracks.CelH * Tracks.CursorY);
+        ShowCaret(Tracks.Handle);
+        ShowStat;
       end
       else
       begin
-      DoCursorDown;
+        DoCursorDown;
       end;
     VK_UP:
 {      if (ssCtrl in Shift) and (ssShift in Shift) then
@@ -2278,37 +2513,37 @@ begin
       else if (ssShift in Shift) then
       begin
       end
-      else }if (ssCtrl in Shift) then
+      else } if (ssCtrl in Shift) then
       begin
-          Tracks.ShownFrom := 0;
-          Tracks.CursorY := Tracks.N1OfLines;
-          if not (ssShift in Shift) then
-            Tracks.RemoveSelection(0, True);
-          HideCaret(Tracks.Handle);
-          Tracks.RedrawTracks(0);
-          SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
-            Tracks.CelH * Tracks.CursorY);
-          ShowCaret(Tracks.Handle);
-          ShowStat;
+        Tracks.ShownFrom := 0;
+        Tracks.CursorY := Tracks.N1OfLines;
+        if not (ssShift in Shift) then
+          Tracks.RemoveSelection(0, True);
+        HideCaret(Tracks.Handle);
+        Tracks.RedrawTracks(0);
+        SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
+          Tracks.CelH * Tracks.CursorY);
+        ShowCaret(Tracks.Handle);
+        ShowStat;
       end
       else
       begin
-      DoCursorUp;
+        DoCursorUp;
       end;
     VK_LEFT:
       DoCursorLeft;
     VK_RIGHT:
       DoCursorRight;
     VK_CAPITAL:
-        if Tracks.CursorX >= 36 then
-        begin
+      if Tracks.CursorX >= 36 then
+      begin
         // c
 //      SpeedButton9Click(Sender);
         if VTMP.IsChans[0].Global_Ton and
           VTMP.IsChans[0].Global_Noise and
           VTMP.IsChans[0].Global_Envelope and
 
-          VTMP.IsChans[1].Global_Ton and
+        VTMP.IsChans[1].Global_Ton and
           VTMP.IsChans[1].Global_Noise and
           VTMP.IsChans[1].Global_Envelope
           then
@@ -2362,9 +2597,9 @@ begin
 
 
 
-        end
-        else if Tracks.CursorX >= 22 then
-        begin
+      end
+      else if Tracks.CursorX >= 22 then
+      begin
         // b
 //      SpeedButton5Click(Sender);
         if VTMP.IsChans[0].Global_Ton and
@@ -2422,9 +2657,9 @@ begin
         end;
         StopAndRestart
 
-        end
-        else if Tracks.CursorX >= 8 then
-        begin
+      end
+      else if Tracks.CursorX >= 8 then
+      begin
         // a
 //        SpeedButton1Click(Sender);
         if VTMP.IsChans[1].Global_Ton and
@@ -2481,13 +2716,13 @@ begin
 
         end;
         StopAndRestart
-        end
-        else if Tracks.CursorX >= 5 then
-        begin
+      end
+      else if Tracks.CursorX >= 5 then
+      begin
         //noise
         if VTMP.IsChans[0].Global_Noise and
-           VTMP.IsChans[1].Global_Noise and
-           VTMP.IsChans[2].Global_Noise then
+          VTMP.IsChans[1].Global_Noise and
+          VTMP.IsChans[2].Global_Noise then
         begin
           VTMP.IsChans[0].Global_Noise := False;
           VTMP.IsChans[1].Global_Noise := False;
@@ -2505,13 +2740,13 @@ begin
           SpeedButton7.Down := True;
           SpeedButton11.Down := True;
         end
-        end
-        else if Tracks.CursorX >= 0 then
-        begin
+      end
+      else if Tracks.CursorX >= 0 then
+      begin
         //envelope
         if VTMP.IsChans[0].Global_Envelope and
-           VTMP.IsChans[1].Global_Envelope and
-           VTMP.IsChans[2].Global_Envelope then
+          VTMP.IsChans[1].Global_Envelope and
+          VTMP.IsChans[2].Global_Envelope then
         begin
           VTMP.IsChans[0].Global_Envelope := False;
           VTMP.IsChans[1].Global_Envelope := False;
@@ -2530,13 +2765,13 @@ begin
           SpeedButton12.Down := True;
         end;
         StopAndRestart
-        end;
+      end;
 
 
     VK_MULTIPLY:
       if (ssCtrl in Shift) and (ssShift in Shift) then
       begin
-      MainForm.ExpandTwice1Click(Sender);
+        MainForm.ExpandTwice1Click(Sender);
       end
       else if (ssShift in Shift) then
       begin
@@ -2552,61 +2787,61 @@ begin
         begin
         // c
 //      SpeedButton9Click(Sender);
-        if VTMP.IsChans[0].Global_Ton and
-          VTMP.IsChans[0].Global_Noise and
-          VTMP.IsChans[0].Global_Envelope and
+          if VTMP.IsChans[0].Global_Ton and
+            VTMP.IsChans[0].Global_Noise and
+            VTMP.IsChans[0].Global_Envelope and
 
           VTMP.IsChans[1].Global_Ton and
-          VTMP.IsChans[1].Global_Noise and
-          VTMP.IsChans[1].Global_Envelope
-          then
-        begin
-          VTMP.IsChans[0].Global_Ton := False;
-          VTMP.IsChans[0].Global_Noise := False;
-          VTMP.IsChans[0].Global_Envelope := False;
-          SpeedButton2.Down := False;
-          SpeedButton3.Down := False;
-          SpeedButton4.Down := False;
+            VTMP.IsChans[1].Global_Noise and
+            VTMP.IsChans[1].Global_Envelope
+            then
+          begin
+            VTMP.IsChans[0].Global_Ton := False;
+            VTMP.IsChans[0].Global_Noise := False;
+            VTMP.IsChans[0].Global_Envelope := False;
+            SpeedButton2.Down := False;
+            SpeedButton3.Down := False;
+            SpeedButton4.Down := False;
 
-          VTMP.IsChans[1].Global_Ton := False;
-          VTMP.IsChans[1].Global_Noise := False;
-          VTMP.IsChans[1].Global_Envelope := False;
-          SpeedButton6.Down := False;
-          SpeedButton7.Down := False;
-          SpeedButton8.Down := False;
+            VTMP.IsChans[1].Global_Ton := False;
+            VTMP.IsChans[1].Global_Noise := False;
+            VTMP.IsChans[1].Global_Envelope := False;
+            SpeedButton6.Down := False;
+            SpeedButton7.Down := False;
+            SpeedButton8.Down := False;
 
-          VTMP.IsChans[2].Global_Ton := True;
-          VTMP.IsChans[2].Global_Noise := True;
-          VTMP.IsChans[2].Global_Envelope := True;
-          SpeedButton10.Down := True;
-          SpeedButton11.Down := True;
-          SpeedButton12.Down := True;
-        end
-        else
-        begin
-          VTMP.IsChans[0].Global_Ton := True;
-          VTMP.IsChans[0].Global_Noise := True;
-          VTMP.IsChans[0].Global_Envelope := True;
-          SpeedButton2.Down := True;
-          SpeedButton3.Down := True;
-          SpeedButton4.Down := True;
+            VTMP.IsChans[2].Global_Ton := True;
+            VTMP.IsChans[2].Global_Noise := True;
+            VTMP.IsChans[2].Global_Envelope := True;
+            SpeedButton10.Down := True;
+            SpeedButton11.Down := True;
+            SpeedButton12.Down := True;
+          end
+          else
+          begin
+            VTMP.IsChans[0].Global_Ton := True;
+            VTMP.IsChans[0].Global_Noise := True;
+            VTMP.IsChans[0].Global_Envelope := True;
+            SpeedButton2.Down := True;
+            SpeedButton3.Down := True;
+            SpeedButton4.Down := True;
 
-          VTMP.IsChans[1].Global_Ton := True;
-          VTMP.IsChans[1].Global_Noise := True;
-          VTMP.IsChans[1].Global_Envelope := True;
-          SpeedButton6.Down := True;
-          SpeedButton7.Down := True;
-          SpeedButton8.Down := True;
+            VTMP.IsChans[1].Global_Ton := True;
+            VTMP.IsChans[1].Global_Noise := True;
+            VTMP.IsChans[1].Global_Envelope := True;
+            SpeedButton6.Down := True;
+            SpeedButton7.Down := True;
+            SpeedButton8.Down := True;
 
-          VTMP.IsChans[2].Global_Ton := True;
-          VTMP.IsChans[2].Global_Noise := True;
-          VTMP.IsChans[2].Global_Envelope := True;
-          SpeedButton10.Down := True;
-          SpeedButton11.Down := True;
-          SpeedButton12.Down := True;
+            VTMP.IsChans[2].Global_Ton := True;
+            VTMP.IsChans[2].Global_Noise := True;
+            VTMP.IsChans[2].Global_Envelope := True;
+            SpeedButton10.Down := True;
+            SpeedButton11.Down := True;
+            SpeedButton12.Down := True;
 
-        end;
-        StopAndRestart
+          end;
+          StopAndRestart
 
 
 
@@ -2615,169 +2850,169 @@ begin
         begin
         // b
 //      SpeedButton5Click(Sender);
-        if VTMP.IsChans[0].Global_Ton and
-          VTMP.IsChans[0].Global_Noise and
-          VTMP.IsChans[0].Global_Envelope and
-          VTMP.IsChans[2].Global_Ton and
-          VTMP.IsChans[2].Global_Noise and
-          VTMP.IsChans[2].Global_Envelope then
-        begin
-          VTMP.IsChans[0].Global_Ton := False;
-          VTMP.IsChans[0].Global_Noise := False;
-          VTMP.IsChans[0].Global_Envelope := False;
-          SpeedButton2.Down := False;
-          SpeedButton3.Down := False;
-          SpeedButton4.Down := False;
+          if VTMP.IsChans[0].Global_Ton and
+            VTMP.IsChans[0].Global_Noise and
+            VTMP.IsChans[0].Global_Envelope and
+            VTMP.IsChans[2].Global_Ton and
+            VTMP.IsChans[2].Global_Noise and
+            VTMP.IsChans[2].Global_Envelope then
+          begin
+            VTMP.IsChans[0].Global_Ton := False;
+            VTMP.IsChans[0].Global_Noise := False;
+            VTMP.IsChans[0].Global_Envelope := False;
+            SpeedButton2.Down := False;
+            SpeedButton3.Down := False;
+            SpeedButton4.Down := False;
 
-          VTMP.IsChans[1].Global_Ton := True;
-          VTMP.IsChans[1].Global_Noise := True;
-          VTMP.IsChans[1].Global_Envelope := True;
-          SpeedButton6.Down := True;
-          SpeedButton7.Down := True;
-          SpeedButton8.Down := True;
+            VTMP.IsChans[1].Global_Ton := True;
+            VTMP.IsChans[1].Global_Noise := True;
+            VTMP.IsChans[1].Global_Envelope := True;
+            SpeedButton6.Down := True;
+            SpeedButton7.Down := True;
+            SpeedButton8.Down := True;
 
-          VTMP.IsChans[2].Global_Ton := False;
-          VTMP.IsChans[2].Global_Noise := False;
-          VTMP.IsChans[2].Global_Envelope := False;
-          SpeedButton10.Down := False;
-          SpeedButton11.Down := False;
-          SpeedButton12.Down := False;
+            VTMP.IsChans[2].Global_Ton := False;
+            VTMP.IsChans[2].Global_Noise := False;
+            VTMP.IsChans[2].Global_Envelope := False;
+            SpeedButton10.Down := False;
+            SpeedButton11.Down := False;
+            SpeedButton12.Down := False;
 
-        end
-        else
-        begin
-          VTMP.IsChans[0].Global_Ton := True;
-          VTMP.IsChans[0].Global_Noise := True;
-          VTMP.IsChans[0].Global_Envelope := True;
-          SpeedButton2.Down := True;
-          SpeedButton3.Down := True;
-          SpeedButton4.Down := True;
+          end
+          else
+          begin
+            VTMP.IsChans[0].Global_Ton := True;
+            VTMP.IsChans[0].Global_Noise := True;
+            VTMP.IsChans[0].Global_Envelope := True;
+            SpeedButton2.Down := True;
+            SpeedButton3.Down := True;
+            SpeedButton4.Down := True;
 
-          VTMP.IsChans[1].Global_Ton := True;
-          VTMP.IsChans[1].Global_Noise := True;
-          VTMP.IsChans[1].Global_Envelope := True;
-          SpeedButton6.Down := True;
-          SpeedButton7.Down := True;
-          SpeedButton8.Down := True;
+            VTMP.IsChans[1].Global_Ton := True;
+            VTMP.IsChans[1].Global_Noise := True;
+            VTMP.IsChans[1].Global_Envelope := True;
+            SpeedButton6.Down := True;
+            SpeedButton7.Down := True;
+            SpeedButton8.Down := True;
 
-          VTMP.IsChans[2].Global_Ton := True;
-          VTMP.IsChans[2].Global_Noise := True;
-          VTMP.IsChans[2].Global_Envelope := True;
-          SpeedButton10.Down := True;
-          SpeedButton11.Down := True;
-          SpeedButton12.Down := True;
+            VTMP.IsChans[2].Global_Ton := True;
+            VTMP.IsChans[2].Global_Noise := True;
+            VTMP.IsChans[2].Global_Envelope := True;
+            SpeedButton10.Down := True;
+            SpeedButton11.Down := True;
+            SpeedButton12.Down := True;
 
-        end;
-        StopAndRestart
+          end;
+          StopAndRestart
 
         end
         else if Tracks.CursorX >= 8 then
         begin
         // a
 //        SpeedButton1Click(Sender);
-        if VTMP.IsChans[1].Global_Ton and
-          VTMP.IsChans[1].Global_Noise and
-          VTMP.IsChans[1].Global_Envelope and
-          VTMP.IsChans[2].Global_Ton and
-          VTMP.IsChans[2].Global_Noise and
-          VTMP.IsChans[2].Global_Envelope then
-        begin
-          VTMP.IsChans[0].Global_Ton := True;
-          VTMP.IsChans[0].Global_Noise := True;
-          VTMP.IsChans[0].Global_Envelope := True;
-          SpeedButton2.Down := True;
-          SpeedButton3.Down := True;
-          SpeedButton4.Down := True;
+          if VTMP.IsChans[1].Global_Ton and
+            VTMP.IsChans[1].Global_Noise and
+            VTMP.IsChans[1].Global_Envelope and
+            VTMP.IsChans[2].Global_Ton and
+            VTMP.IsChans[2].Global_Noise and
+            VTMP.IsChans[2].Global_Envelope then
+          begin
+            VTMP.IsChans[0].Global_Ton := True;
+            VTMP.IsChans[0].Global_Noise := True;
+            VTMP.IsChans[0].Global_Envelope := True;
+            SpeedButton2.Down := True;
+            SpeedButton3.Down := True;
+            SpeedButton4.Down := True;
 
-          VTMP.IsChans[1].Global_Ton := False;
-          VTMP.IsChans[1].Global_Noise := False;
-          VTMP.IsChans[1].Global_Envelope := False;
-          SpeedButton6.Down := False;
-          SpeedButton7.Down := False;
-          SpeedButton8.Down := False;
+            VTMP.IsChans[1].Global_Ton := False;
+            VTMP.IsChans[1].Global_Noise := False;
+            VTMP.IsChans[1].Global_Envelope := False;
+            SpeedButton6.Down := False;
+            SpeedButton7.Down := False;
+            SpeedButton8.Down := False;
 
-          VTMP.IsChans[2].Global_Ton := False;
-          VTMP.IsChans[2].Global_Noise := False;
-          VTMP.IsChans[2].Global_Envelope := False;
-          SpeedButton10.Down := False;
-          SpeedButton11.Down := False;
-          SpeedButton12.Down := False;
+            VTMP.IsChans[2].Global_Ton := False;
+            VTMP.IsChans[2].Global_Noise := False;
+            VTMP.IsChans[2].Global_Envelope := False;
+            SpeedButton10.Down := False;
+            SpeedButton11.Down := False;
+            SpeedButton12.Down := False;
 
-        end
-        else
-        begin
-          VTMP.IsChans[0].Global_Ton := True;
-          VTMP.IsChans[0].Global_Noise := True;
-          VTMP.IsChans[0].Global_Envelope := True;
-          SpeedButton2.Down := True;
-          SpeedButton3.Down := True;
-          SpeedButton4.Down := True;
+          end
+          else
+          begin
+            VTMP.IsChans[0].Global_Ton := True;
+            VTMP.IsChans[0].Global_Noise := True;
+            VTMP.IsChans[0].Global_Envelope := True;
+            SpeedButton2.Down := True;
+            SpeedButton3.Down := True;
+            SpeedButton4.Down := True;
 
-          VTMP.IsChans[1].Global_Ton := True;
-          VTMP.IsChans[1].Global_Noise := True;
-          VTMP.IsChans[1].Global_Envelope := True;
-          SpeedButton6.Down := True;
-          SpeedButton7.Down := True;
-          SpeedButton8.Down := True;
+            VTMP.IsChans[1].Global_Ton := True;
+            VTMP.IsChans[1].Global_Noise := True;
+            VTMP.IsChans[1].Global_Envelope := True;
+            SpeedButton6.Down := True;
+            SpeedButton7.Down := True;
+            SpeedButton8.Down := True;
 
-          VTMP.IsChans[2].Global_Ton := True;
-          VTMP.IsChans[2].Global_Noise := True;
-          VTMP.IsChans[2].Global_Envelope := True;
-          SpeedButton10.Down := True;
-          SpeedButton11.Down := True;
-          SpeedButton12.Down := True;
+            VTMP.IsChans[2].Global_Ton := True;
+            VTMP.IsChans[2].Global_Noise := True;
+            VTMP.IsChans[2].Global_Envelope := True;
+            SpeedButton10.Down := True;
+            SpeedButton11.Down := True;
+            SpeedButton12.Down := True;
 
-        end;
-        StopAndRestart
+          end;
+          StopAndRestart
         end
         else if Tracks.CursorX >= 5 then
         begin
         //noise
-        if VTMP.IsChans[0].Global_Noise and
-           VTMP.IsChans[1].Global_Noise and
-           VTMP.IsChans[2].Global_Noise then
-        begin
-          VTMP.IsChans[0].Global_Noise := False;
-          VTMP.IsChans[1].Global_Noise := False;
-          VTMP.IsChans[2].Global_Noise := False;
-          SpeedButton3.Down := False;
-          SpeedButton7.Down := False;
-          SpeedButton11.Down := False;
-        end
-        else
-        begin
-          VTMP.IsChans[0].Global_Noise := True;
-          VTMP.IsChans[1].Global_Noise := True;
-          VTMP.IsChans[2].Global_Noise := True;
-          SpeedButton3.Down := True;
-          SpeedButton7.Down := True;
-          SpeedButton11.Down := True;
-        end
+          if VTMP.IsChans[0].Global_Noise and
+            VTMP.IsChans[1].Global_Noise and
+            VTMP.IsChans[2].Global_Noise then
+          begin
+            VTMP.IsChans[0].Global_Noise := False;
+            VTMP.IsChans[1].Global_Noise := False;
+            VTMP.IsChans[2].Global_Noise := False;
+            SpeedButton3.Down := False;
+            SpeedButton7.Down := False;
+            SpeedButton11.Down := False;
+          end
+          else
+          begin
+            VTMP.IsChans[0].Global_Noise := True;
+            VTMP.IsChans[1].Global_Noise := True;
+            VTMP.IsChans[2].Global_Noise := True;
+            SpeedButton3.Down := True;
+            SpeedButton7.Down := True;
+            SpeedButton11.Down := True;
+          end
         end
         else if Tracks.CursorX >= 0 then
         begin
         //envelope
-        if VTMP.IsChans[0].Global_Envelope and
-           VTMP.IsChans[1].Global_Envelope and
-           VTMP.IsChans[2].Global_Envelope then
-        begin
-          VTMP.IsChans[0].Global_Envelope := False;
-          VTMP.IsChans[1].Global_Envelope := False;
-          VTMP.IsChans[2].Global_Envelope := False;
-          SpeedButton4.Down := False;
-          SpeedButton8.Down := False;
-          SpeedButton12.Down := False;
-        end
-        else
-        begin
-          VTMP.IsChans[0].Global_Envelope := True;
-          VTMP.IsChans[1].Global_Envelope := True;
-          VTMP.IsChans[2].Global_Envelope := True;
-          SpeedButton4.Down := True;
-          SpeedButton8.Down := True;
-          SpeedButton12.Down := True;
-        end;
-        StopAndRestart
+          if VTMP.IsChans[0].Global_Envelope and
+            VTMP.IsChans[1].Global_Envelope and
+            VTMP.IsChans[2].Global_Envelope then
+          begin
+            VTMP.IsChans[0].Global_Envelope := False;
+            VTMP.IsChans[1].Global_Envelope := False;
+            VTMP.IsChans[2].Global_Envelope := False;
+            SpeedButton4.Down := False;
+            SpeedButton8.Down := False;
+            SpeedButton12.Down := False;
+          end
+          else
+          begin
+            VTMP.IsChans[0].Global_Envelope := True;
+            VTMP.IsChans[1].Global_Envelope := True;
+            VTMP.IsChans[2].Global_Envelope := True;
+            SpeedButton4.Down := True;
+            SpeedButton8.Down := True;
+            SpeedButton12.Down := True;
+          end;
+          StopAndRestart
         end;
         ;
 
@@ -2787,7 +3022,7 @@ begin
     VK_DIVIDE:
       if (ssCtrl in Shift) and (ssShift in Shift) then
       begin
-      MainForm.Compresspattern1Click(Sender);
+        MainForm.Compresspattern1Click(Sender);
       end
       else if (ssShift in Shift) then
       begin
@@ -2799,55 +3034,55 @@ begin
       else
       begin
       //next pattern
-        chk1.checked :=  not chk1.checked;
+        chk1.checked := not chk1.checked;
 
       end;
 
     VK_ADD:
       if (ssCtrl in Shift) and (ssShift in Shift) then
       begin
-      MainForm.TransposeSelection(12);
+        MainForm.TransposeSelection(12);
 //    TransposeSelection(12);
       end
       else if (ssShift in Shift) then
       begin
-      MainForm.TransposeSelection(1);
+        MainForm.TransposeSelection(1);
       end
       else if (ssCtrl in Shift) then
       begin
       //next position
       //SelectPosition(StringGrid1.Col+1)
-      if StringGrid1.Col < StringGrid1.ColCount then StringGrid1.Col := StringGrid1.Col+1
+        if StringGrid1.Col < StringGrid1.ColCount then StringGrid1.Col := StringGrid1.Col + 1
       end
       else
       begin
       //next pattern
 //      ChangePattern(PatNum+1);
-      if PatNum <=83 then Edit2.Text := IntToStr(PatNum +1);
+        if PatNum <= 83 then Edit2.Text := IntToStr(PatNum + 1);
       end;
     VK_SUBTRACT:
       if (ssCtrl in Shift) and (ssShift in Shift) then
       begin
-      MainForm.TransposeSelection(-12);
+        MainForm.TransposeSelection(-12);
 //    TransposeSelection(12);
       end
       else if (ssShift in Shift) then
       begin
-      MainForm.TransposeSelection(-1);
+        MainForm.TransposeSelection(-1);
       end
       else if (ssCtrl in Shift) then
       begin
       //prev position
-      if StringGrid1.Col >=1 then StringGrid1.Col := StringGrid1.Col-1
+        if StringGrid1.Col >= 1 then StringGrid1.Col := StringGrid1.Col - 1
       //  SelectPosition(StringGrid1.Col-1)
       end
       else
       begin
       //prev pattern
       //ChangePattern(PatNum-1);
-      if PatNum >=1 then Edit2.Text := IntToStr(PatNum - 1);
+        if PatNum >= 1 then Edit2.Text := IntToStr(PatNum - 1);
       end;
-   VK_HOME:
+    VK_HOME:
       begin
         RemSel;
         if ssCtrl in Shift then
@@ -2865,15 +3100,15 @@ begin
         end
         else
         begin
-        Tracks.ShowSelection(0);
-        Tracks.CursorX := 0;
-        Tracks.RecreateCaret;
-        SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
-          Tracks.CelH * Tracks.CursorY);
-        if not (ssCtrl in Shift) and (ssShift in Shift) then
           Tracks.ShowSelection(0);
-        if not (ssShift in Shift) then
-          Tracks.RemoveSelection(0, True)
+          Tracks.CursorX := 0;
+          Tracks.RecreateCaret;
+          SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
+            Tracks.CelH * Tracks.CursorY);
+          if not (ssCtrl in Shift) and (ssShift in Shift) then
+            Tracks.ShowSelection(0);
+          if not (ssShift in Shift) then
+            Tracks.RemoveSelection(0, True)
         end
       end;
     VK_END:
@@ -2881,10 +3116,10 @@ begin
         RemSel;
         if ssCtrl in Shift then
         begin
-        if Tracks.ShownPattern = nil then
-          PLen := DefPatLen
-        else
-          PLen := Tracks.ShownPattern.Length;
+          if Tracks.ShownPattern = nil then
+            PLen := DefPatLen
+          else
+            PLen := Tracks.ShownPattern.Length;
 
           Tracks.ShownFrom := PLen - 1;
           Tracks.CursorY := Tracks.N1OfLines;
@@ -2899,15 +3134,15 @@ begin
         end
         else
         begin
-        Tracks.ShowSelection(0);
-        Tracks.CursorX := 48;
-        Tracks.RecreateCaret;
-        SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
-          Tracks.CelH * Tracks.CursorY);
-        if not (ssCtrl in Shift) and (ssShift in Shift) then
           Tracks.ShowSelection(0);
-        if not (ssShift in Shift) then
-          Tracks.RemoveSelection(0, True)
+          Tracks.CursorX := 48;
+          Tracks.RecreateCaret;
+          SetCaretPos(Tracks.CelW * (3 + Tracks.CursorX),
+            Tracks.CelH * Tracks.CursorY);
+          if not (ssCtrl in Shift) and (ssShift in Shift) then
+            Tracks.ShowSelection(0);
+          if not (ssShift in Shift) then
+            Tracks.RemoveSelection(0, True)
         end;
       end;
     VK_PRIOR:
@@ -2916,10 +3151,10 @@ begin
         if ssCtrl in Shift then
         begin
         // somewhere into middle
-        if Tracks.ShownPattern = nil then
-          PLen := DefPatLen
-        else
-          PLen := Tracks.ShownPattern.Length;
+          if Tracks.ShownPattern = nil then
+            PLen := DefPatLen
+          else
+            PLen := Tracks.ShownPattern.Length;
 
           Tracks.ShownFrom := PLen div 2;
           Tracks.CursorY := Tracks.N1OfLines;
@@ -2995,7 +3230,7 @@ begin
           PLen := Tracks.ShownPattern.Length;
         if ssCtrl in Shift then
         begin
-          Tracks.ShownFrom := ( PLen div 4 ) *3 ;
+          Tracks.ShownFrom := (PLen div 4) * 3;
           Tracks.CursorY := Tracks.N1OfLines;
           if not (ssShift in Shift) then
             Tracks.RemoveSelection(0, True);
@@ -3090,26 +3325,26 @@ begin
       else if (Shift = [])
 
         {and ((Tracks.SelX <> Tracks.CursorX) or //commented especially for EA
-      (Tracks.SelY <> Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY))} then
+      (Tracks.SelY <> Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY))}then
+      begin
+        if Tracks.CursorX in EnvelopePoses then
         begin
-         if Tracks.CursorX in EnvelopePoses then
-          begin
           i := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
           if (i >= 0) and (i < Tracks.ShownPattern.Length) then
-             Tracks.ShownPattern.Items[i].Envelope := 0;
-          end;
-          Tracks.ClearSelection;
-        end
+            Tracks.ShownPattern.Items[i].Envelope := 0;
+        end;
+        Tracks.ClearSelection;
+      end
 
       else
         DoClearLine;
     192:
       begin
-      if Shift = [] then
-      begin
-        if StringGrid1.CanFocus then
-          StringGrid1.SetFocus;
-      end;
+        if Shift = [] then
+        begin
+          if StringGrid1.CanFocus then
+            StringGrid1.SetFocus;
+        end;
       end;
     VK_NUMPAD0:
       ToggleAutoEnv;
@@ -3349,7 +3584,19 @@ begin
           CursorX := ColTabs[ColTab(CursorX) - 1];
           RecreateCaret;
           SetCaretPos(CelW * CursorX, 0)
-        end
+        end;
+      VK_ADD, VK_SUBTRACT:
+        begin
+          if TestSample then
+          begin
+            if TMDIChild(ParWind).Samples.CanFocus then
+              TMDIChild(MainForm.ActiveMDIChild).SamplesKeyDown(Sender, Key, Shift);
+          end
+          else if TMDIChild(ParWind).Ornaments.CanFocus then
+            TMDIChild(MainForm.ActiveMDIChild).SamplesKeyDown(Sender, Key, Shift);
+
+        end;
+
     end
   else if (Shift = [ssCtrl, ssShift]) or
     (Shift = [ssShift]) then
@@ -3357,7 +3604,15 @@ begin
       if CursorX in NotePoses then
         DoNoteKey
 end;
-
+procedure TMDIChild.SamplesKeyUp(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+ begin
+   if (Shift <> [ssShift]) and (Samples.isLineTesting) and (not MainForm.Saved_TestForever) then
+   begin
+      SampleTestLine.TestLineExit(Sender);
+      Samples.isLineTesting:= False;
+   end;
+ end;
 procedure TMDIChild.SamplesKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 type
@@ -3381,8 +3636,12 @@ type
 
 var
   ST: PSampleTick;
-  ix, SLen, SPos:Integer;
-  ff,ll,ii: Integer; //for, len , position
+  ix, SLen, SPos: Integer;
+  ff, ll, ii: Integer; //for, len , position
+  curToneTab, noteFreq1, noteFreq2:Integer;
+
+  envshift:ShortInt;
+  envFreq:Integer;
 
   procedure DoToggle(n: TSamToggles);
   var
@@ -3593,17 +3852,64 @@ var
           if nm > $F then
             nm := n;
           Samples.InputSNumber := nm;
+
+          ValidateSample2(SamNum);
+          if Samples.ShownSample.Length <= Samples.ShownFrom+ Samples.CursorY then
+             Samples.ShownSample.Length:= Samples.ShownFrom+ Samples.CursorY+1;
+
           DoNumber(NmVol)
         end
     end
   end;
 
+
+  procedure copySampleToBuffer();
+  var
+    ff:Integer;
+  begin
+     if not Samples.isSelecting then Exit;
+     ValidateSample2(SamNum);
+     GetSamParams(ll, ii);
+
+//   ll:= Samples.selStart;
+//   ii:= Samples.selEnd;
+     for ff := 0 to (Samples.selEnd - Samples.selStart) do
+     begin
+       MainForm.BuffSample.Items[ff] :=
+       Samples.ShownSample.items[ff + Samples.selStart];
+     end;
+
+     MainForm.BuffSample.Loop := 0;
+     MainForm.BuffSample.Length := Samples.selEnd - Samples.selStart;
+  end;
+
+  procedure selectionOff();
+  begin
+//   copySampleToBuffer();
+     Samples.isSelecting:= False;
+     HideCaret(Samples.Handle);
+     Samples.RedrawSamples(0);
+     ShowCaret(Samples.Handle)
+  end;
+
+
 begin
+//  if Shift <> [ssShift] then Samples.isSelecting := False;
+//  if (Shift = [ssShift]) and
+//     (isSelecting = False) and then
+
+  if ((Shift <> [ssShift])) and (not MainForm.Saved_TestForever ) then
+    begin
+      SampleTestLine.KeyPressed:=0;
+      SampleTestLine.TestLineExit(Sender);
+    end;
+
   if (Shift <> []) or not (Key in [Ord('0')..Ord('9'),
     Ord('A')..Ord('F')]) then
-    Samples.InputSNumber := 0;
-    ff:= Ord('C');
-    ll:=ff;
+        Samples.InputSNumber := 0;
+
+  ff := Ord('C');
+  ll := ff;
   if Shift = [] then
     case Key of
       VK_NEXT:
@@ -3662,6 +3968,7 @@ begin
 
       VK_DOWN:
         begin
+          selectionOff;
           if (Samples.CursorY < Samples.NOfLines - 1) then
           begin
             Inc(Samples.CursorY);
@@ -3678,6 +3985,7 @@ begin
         end;
       VK_UP:
         begin
+          selectionOff;
           if (Samples.CursorY > 0) then
           begin
             Dec(Samples.CursorY);
@@ -3737,36 +4045,36 @@ begin
         //delete position of sample.
         //Samples.CursorY;
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
-         if (Samples.ShownSample.Length > 0) and (ii < (ll-1)) then
+          if (Samples.ShownSample.Length > 0) and (ii < (ll - 1)) then
           begin
-            Samples.ShownSample.Length :=Samples.ShownSample.Length - 1;
-            if Samples.ShownSample.Loop > ii then Samples.ShownSample.Loop:= Samples.ShownSample.Loop -1;
-           end;
-
-          for ff:= ii to 62 do
-          begin
-            Samples.ShownSample.Items[ff]:= Samples.ShownSample.Items[ff+1];
+            Samples.ShownSample.Length := Samples.ShownSample.Length - 1;
+            if Samples.ShownSample.Loop > ii then Samples.ShownSample.Loop := Samples.ShownSample.Loop - 1;
           end;
-            Samples.ShownSample.Items[63].Add_to_Ton:=0;
-            Samples.ShownSample.Items[63].Add_to_Ton := 0;
-            Samples.ShownSample.Items[63].Ton_Accumulation := False;
-            Samples.ShownSample.Items[63].Amplitude := 0;
-            Samples.ShownSample.Items[63].Amplitude_Sliding := False;
-            Samples.ShownSample.Items[63].Amplitude_Slide_Up := False;
-            Samples.ShownSample.Items[63].Envelope_Enabled := False;
-            Samples.ShownSample.Items[63].Envelope_or_Noise_Accumulation := False;
-            Samples.ShownSample.Items[63].Add_to_Envelope_or_Noise := 0;
-            Samples.ShownSample.Items[63].Mixer_Ton := False;
-            Samples.ShownSample.Items[63].Mixer_Noise := False;
 
-            Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-            Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
+          for ff := ii to 62 do
+          begin
+            Samples.ShownSample.Items[ff] := Samples.ShownSample.Items[ff + 1];
+          end;
+          Samples.ShownSample.Items[63].Add_to_Ton := 0;
+          Samples.ShownSample.Items[63].Add_to_Ton := 0;
+          Samples.ShownSample.Items[63].Ton_Accumulation := False;
+          Samples.ShownSample.Items[63].Amplitude := 0;
+          Samples.ShownSample.Items[63].Amplitude_Sliding := False;
+          Samples.ShownSample.Items[63].Amplitude_Slide_Up := False;
+          Samples.ShownSample.Items[63].Envelope_Enabled := False;
+          Samples.ShownSample.Items[63].Envelope_or_Noise_Accumulation := False;
+          Samples.ShownSample.Items[63].Add_to_Envelope_or_Noise := 0;
+          Samples.ShownSample.Items[63].Mixer_Ton := False;
+          Samples.ShownSample.Items[63].Mixer_Noise := False;
 
-            HideCaret(Samples.Handle);
-            Samples.RedrawSamples(0);
-            ShowCaret(Samples.Handle);
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
         end;
       VK_INSERT:
         if (ssCtrl in Shift) and (ssShift in Shift) then
@@ -3782,23 +4090,23 @@ begin
         else
         begin
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
           if (ll < 64) and (ii <= (ll)) then
           begin
-            Samples.ShownSample.Length :=Samples.ShownSample.Length + 1;
-            if Samples.ShownSample.Loop >= ii then Samples.ShownSample.Loop:= Samples.ShownSample.Loop +1;
-           end;
-
-          for ff:= 62 downto ii do
-          begin
-            Samples.ShownSample.Items[ff+1]:= Samples.ShownSample.Items[ff];
+            Samples.ShownSample.Length := Samples.ShownSample.Length + 1;
+            if Samples.ShownSample.Loop >= ii then Samples.ShownSample.Loop := Samples.ShownSample.Loop + 1;
           end;
-            Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-            Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
-            HideCaret(Samples.Handle);
-            Samples.RedrawSamples(0);
-            ShowCaret(Samples.Handle);
+
+          for ff := 62 downto ii do
+          begin
+            Samples.ShownSample.Items[ff + 1] := Samples.ShownSample.Items[ff];
+          end;
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
 
         end;
 
@@ -3826,6 +4134,7 @@ begin
     case Key of
       VK_NEXT, VK_END, VK_DOWN:
         begin
+          selectionOff;
           if (((Key = VK_END) or (Key = VK_DOWN)) and (Samples.CursorX <> 20)) or
             (Samples.CursorY < Samples.NOfLines - 1) then
           begin
@@ -3848,10 +4157,11 @@ begin
         end;
       VK_PRIOR, VK_HOME, VK_UP:
         begin
-          if (((Key = VK_HOME) or (Key = VK_UP) ) and (Samples.CursorX <> 0)) or
+          selectionOff;        
+          if (((Key = VK_HOME) or (Key = VK_UP)) and (Samples.CursorX <> 0)) or
             (Samples.CursorY > 0) then
           begin
-            if (Key = VK_HOME) or (Key = VK_UP)then
+            if (Key = VK_HOME) or (Key = VK_UP) then
             begin
               //Samples.CursorX := 0;
               Samples.RecreateCaret
@@ -3892,20 +4202,20 @@ begin
       VK_ADD:
         begin
         //next sample
-        if StrToInt(Edit5.Text) in [1..30] then
-        begin
-          ChangeSample(StrToInt(Edit5.Text)+1);
-          Edit5.Text:= IntToStr((StrToInt(Edit5.Text)+1));
-        end;
+          if StrToInt(Edit5.Text) in [1..30] then
+          begin
+            ChangeSample(StrToInt(Edit5.Text) + 1);
+            Edit5.Text := IntToStr((StrToInt(Edit5.Text) + 1));
+          end;
         end;
       VK_SUBTRACT:
         begin
         //previous sample
-        if StrToInt(Edit5.Text) in [2..31] then
-        begin
-          ChangeSample(StrToInt(Edit5.Text)-1);
-          Edit5.Text:= IntToStr((StrToInt(Edit5.Text)-1));
-        end;
+          if StrToInt(Edit5.Text) in [2..31] then
+          begin
+            ChangeSample(StrToInt(Edit5.Text) - 1);
+            Edit5.Text := IntToStr((StrToInt(Edit5.Text) - 1));
+          end;
         end;
       VK_DELETE:
         begin
@@ -3944,28 +4254,21 @@ begin
         end;}
       VK_INSERT:
         begin
-          ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
-
-          for ff:= 0 to (Samples.ShownSample.Length - Samples.ShownSample.Loop) do
-          begin
-            MainForm.BuffSample.Items[ff]:=
-            Samples.ShownSample.items[ff + Samples.ShownSample.Loop];
-          end;
-
-          MainForm.BuffSample.Loop:= 0;
-          MainForm.BuffSample.Length:= Samples.ShownSample.Length - Samples.ShownSample.Loop;
+          copySampleToBuffer();
         end;
       Ord('A'):
         begin
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
-          Samples.ShownSample.Length:=64;
-          Samples.ShownSample.Loop:=0;
+//          Samples.ShownSample.Length := 64;
+//          Samples.ShownSample.Loop := 0;
+          Samples.selStart:=0;
+          Samples.selEnd:=64;
+          Samples.isSelecting:=True;          
 
-          Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-          Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
+//          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+//          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
           HideCaret(Samples.Handle);
           Samples.RedrawSamples(0);
           ShowCaret(Samples.Handle);
@@ -3989,57 +4292,162 @@ begin
       VK_HOME:
         begin
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
-         if (Samples.ShownSample.Length > 0) and (ii < ll) then
+          if (Samples.ShownSample.Length > 0) and (ii < ll) then
           begin
-            Samples.ShownSample.Loop:= ii;
+            Samples.ShownSample.Loop := ii;
           end;
-            Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-            Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
 
-            HideCaret(Samples.Handle);
-            Samples.RedrawSamples(0);
-            ShowCaret(Samples.Handle);
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
         end;
       VK_END:
         begin
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
-          Samples.ShownSample.Length:= ii+1;
+          Samples.ShownSample.Length := ii + 1;
           if Samples.ShownSample.Loop > Samples.ShownSample.Length then Samples.ShownSample.Loop := ii;
 
-            Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-            Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
 
-            HideCaret(Samples.Handle);
-            Samples.RedrawSamples(0);
-            ShowCaret(Samples.Handle);
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
         end;
       VK_INSERT:
         begin
           ValidateSample2(SamNum);
-          GetSamParams(ll,ii);
+          GetSamParams(ll, ii);
 
-          for ff:= MainForm.BuffSample.Loop to MainForm.BuffSample.Length do
+//          ll:= Samples.selStart;
+//          ii:= Samples.selEnd;
+
+          for ff := MainForm.BuffSample.Loop to MainForm.BuffSample.Length-1 do
           begin
-            if ff+ii <= 63 then
+            if ff + ii <= 63 then
             begin
-            Samples.ShownSample.items[ff+ii]:= MainForm.BuffSample.Items[ff];
-            //Samples.ShownSample.Length:= ff;
+              Samples.ShownSample.items[ff + ii] := MainForm.BuffSample.Items[ff];
+              if ff+ii >= Samples.ShownSample.Length then
+                 Samples.ShownSample.Length:= ff+ii+1;
             end;
           end;
 
-            Edit9.Text:= IntToStr(Samples.ShownSample.Length);
-            Edit10.Text:= IntToStr(Samples.ShownSample.Loop);
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
+
+        end;
+      VK_LEFT, VK_RIGHT:
+        begin
+          GetSamParams(ll, ii);
+          Samples.selStart:=ii;
+          Samples.selEnd:=ii;
+          samples.isSelecting:= True;
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
+        end;
+      VK_DOWN:
+        begin
+          if samples.isSelecting = False then
+          begin
+          GetSamParams(ll, ii);
+          Samples.selStart:=ii;
+          Samples.selEnd:=ii+1;
+          samples.isSelecting:= True
+          end;
+
+          if (Samples.CursorY < Samples.NOfLines - 1) then
+          begin
+            Inc(Samples.CursorY);
+            SetCaretPos(Samples.CelW * (3 + Samples.CursorX), Samples.CelH *
+              Samples.CursorY);
+          end
+          else if Samples.ShownFrom < MaxSamLen - Samples.NOfLines then
+          begin
+            Inc(Samples.ShownFrom);
+
+          end;
+
+          if Samples.isSelecting = True then
+          begin
+          GetSamParams(ll, ii);
+          Samples.selEnd:=ii+1;
+          end;
+
+          if Samples.selEnd < Samples.selStart then
+          begin
+            ii:= Samples.selEnd;
+            Samples.selEnd:= Samples.selStart;
+            Samples.selStart:= ii;
+          end;
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
+
+        end;
+      VK_UP:
+        begin
+          if samples.isSelecting = False then
+          begin
+          GetSamParams(ll, ii);
+          Samples.selStart:=ii;
+          Samples.selEnd:=ii+1;
+          samples.isSelecting:= True          
+          end;
+
+          if Samples.selEnd = Samples.selStart then Inc(Samples.selEnd);
+
+          if (Samples.CursorY > 0) then
+          begin
+            Dec(Samples.CursorY);
+            SetCaretPos(Samples.CelW * (3 + Samples.CursorX), Samples.CelH *
+              Samples.CursorY);
+          end
+          else if Samples.ShownFrom > 0 then
+          begin
+            Dec(Samples.ShownFrom);
+
+          end;
+
+          if samples.isSelecting = True then
+          begin
+          GetSamParams(ll, ii);
+
+          Samples.selStart:=ii;
+          end;
+
+          if Samples.selEnd < Samples.selStart then
+          begin
+            ii:= Samples.selEnd;
+            Samples.selEnd:= Samples.selStart;
+            Samples.selStart:= ii;
+          end;
 
             HideCaret(Samples.Handle);
             Samples.RedrawSamples(0);
-            ShowCaret(Samples.Handle);
+            ShowCaret(Samples.Handle)
 
         end;
-
+    else
+      begin
+      Samples.isLineTesting:= True;
+      Shift:= [];
+      SampleTestLine.KeyPressed:=0;
+      SampleTestLine.CursorX:=8;
+      SampleTestLine.TestLineKeyDown(Sender, Key, Shift);
+      end;
     end
   else if Shift = [ssAlt] then
     case Key of
@@ -4048,14 +4456,86 @@ begin
       VK_LEFT:
         CopySampTemplateToCurrent
     end
+  else if Shift = [ssShift, ssCtrl] then
+      begin
+//      ValidateSample2(Key);
+        Shift:=[];
+        GetSamParams(ll, ii);
+//tone
+        if (Samples.CursorX >= 4) and (Samples.CursorX <= 8) then
+        begin
+
+//        curToneTab:= TMDIChild(ActiveMDIChild).VTMP.Ton_Table;
+          curToneTab:= VTMP.Ton_Table;
+          if Key >= 256 then
+          exit;
+          if MainForm.NoteKeys[Key] >= 0 then
+          begin
+        //noteFreq1:= GetNoteFreq(curToneTab,VTMP.Patterns[-1].Items[SamNum].Channel[0].Note);
+          noteFreq1:= GetNoteFreq(curToneTab,VTMP.Patterns[-1].Items[1].Channel[0].Note);
+          noteFreq2:= GetNoteFreq(curToneTab, MainForm.NoteKeys[Key]+ (12 *( SampleTestLine.TestOct - 1)));
+
+          Samples.ShownSample.Items[ii].Add_to_Ton:= noteFreq2 - noteFreq1;
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle)
+          end
+
+        end
+
+//envelope
+        else if (Samples.CursorX >= 10) and (Samples.CursorX <= 18) then
+        begin
+//        curToneTab:= TMDIChild(ActiveMDIChild).VTMP.Ton_Table;
+          curToneTab:= VTMP.Ton_Table;
+          if Key >= 256 then
+          exit;
+          if MainForm.NoteKeys[Key] >= 0 then
+          begin
+        //noteFreq1:= GetNoteFreq(curToneTab,VTMP.Patterns[-1].Items[SamNum].Channel[0].Note);
+          noteFreq1:= GetNoteFreq(curToneTab,VTMP.Patterns[-1].Items[1].Channel[0].Note);
+          noteFreq2:= GetNoteFreq(curToneTab, MainForm.NoteKeys[Key]+ (12 *( SampleTestLine.TestOct - 1)));
+
+//  envshift:ShortInt;
+//  envFreq:Integer;
+          envFreq := (noteFreq2 - noteFreq1);
+          if envFreq >= 0 then
+          begin
+            envFreq := (noteFreq2 - noteFreq1 + 8) div 16;
+            if envFreq > 15 then envFreq := 0;
+          end
+          else
+          begin
+            envFreq := (noteFreq2 - noteFreq1 - 8) div 16;
+            if envFreq < -15 then envFreq := 0;
+          end;
+//          envshift =
+
+          Samples.ShownSample.Items[ii].Add_to_Envelope_or_Noise:= envFreq;
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle)
+          end
+        end;
+      end;
 end;
+
+procedure TMDIChild.OrnamentsKeyUp(Sender: TObject; var Key: Word;
+      Shift: TShiftState);
+ begin
+   if (Shift <> [ssShift]) and (Ornaments.isLineTesting) and (not MainForm.Saved_TestForever) then
+   begin
+      OrnamentTestLine.TestLineExit(Sender);
+      Ornaments.isLineTesting:= False;
+   end;
+ end;
 
 procedure TMDIChild.OrnamentsKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 type
   TOrnToggles = (TgSgn, TgSgnP, TgSgnM);
 var
-  ff,ii,ll, cc:Integer;
+  ff, ii, ll, cc: Integer;
 
   procedure GetOrnParams(var l, i, c: integer);
   begin
@@ -4155,6 +4635,35 @@ var
     DoNumber;
   end;
 
+  procedure copyOrnamentToBuffer();
+  var
+    ff:Integer;
+  begin
+     if not Ornaments.isSelecting then Exit;
+     ValidateOrnament(OrnNum);
+     GetOrnParams(ll, ii, cc);
+
+     for ff := 0 to (Ornaments.selEnd - Ornaments.selStart) do
+     begin
+       MainForm.BuffOrnament.Items[ff] :=
+       Ornaments.ShownOrnament.items[ff + Ornaments.selStart];
+     end;
+
+     MainForm.BuffOrnament.Loop := 0;
+     MainForm.BuffOrnament.Length := Ornaments.selEnd - Ornaments.selStart;
+  end;
+
+  procedure selectionOff();
+  begin
+//   copyOrnamentToBuffer();
+     Ornaments.isSelecting:= False;
+
+     HideCaret(Ornaments.Handle);
+     Ornaments.RedrawOrnaments(0);
+     ShowCaret(Ornaments.Handle);
+
+  end;
+
 begin
   if (Shift <> []) or not (Key in [Ord('0')..Ord('9')]) then
     Ornaments.InputONumber := 0;
@@ -4188,6 +4697,7 @@ begin
         end;
       VK_DOWN:
         begin
+          selectionOff();
           if Ornaments.CursorY < OrnNRaw - 1 then
           begin
             Inc(Ornaments.CursorY);
@@ -4211,6 +4721,7 @@ begin
         end;
       VK_UP:
         begin
+          selectionOff();
           if Ornaments.CursorY > 0 then
           begin
             Dec(Ornaments.CursorY);
@@ -4235,12 +4746,14 @@ begin
       VK_LEFT:
         if Ornaments.CursorX > 0 then
         begin
+          selectionOff();
           Dec(Ornaments.CursorX, 7);
           SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
             Ornaments.CursorY);
         end
         else if Ornaments.ShownFrom > 0 then
         begin
+          selectionOff();
           Dec(Ornaments.ShownFrom, OrnNRaw);
           if Ornaments.ShownFrom < 0 then
             Ornaments.ShownFrom := 0;
@@ -4251,12 +4764,14 @@ begin
       VK_RIGHT:
         if Ornaments.CursorX < (OrnNCol - 1) * 7 then
         begin
+          selectionOff();
           Inc(Ornaments.CursorX, 7);
           SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
             Ornaments.CursorY);
         end
         else if Ornaments.ShownFrom < MaxOrnLen - Ornaments.NOfLines then
         begin
+          selectionOff();
           Inc(Ornaments.ShownFrom, OrnNRaw);
           if Ornaments.ShownFrom > MaxOrnLen - Ornaments.NOfLines then
             Ornaments.ShownFrom := MaxOrnLen - Ornaments.NOfLines;
@@ -4291,26 +4806,26 @@ begin
         //delete position of sample.
         //Samples.CursorY;
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
-         if (Ornaments.ShownOrnament.Length > 0) and (ii < (ll-1)) then
+          if (Ornaments.ShownOrnament.Length > 0) and (ii < (ll - 1)) then
           begin
-            Ornaments.ShownOrnament.Length :=Ornaments.ShownOrnament.Length - 1;
-            if Ornaments.ShownOrnament.Loop > ii then Ornaments.ShownOrnament.Loop:= Ornaments.ShownOrnament.Loop -1;
-           end;
-
-          for ff:= ii to 62 do
-          begin
-            Ornaments.ShownOrnament.Items[ff]:= Ornaments.ShownOrnament.Items[ff+1];
+            Ornaments.ShownOrnament.Length := Ornaments.ShownOrnament.Length - 1;
+            if Ornaments.ShownOrnament.Loop > ii then Ornaments.ShownOrnament.Loop := Ornaments.ShownOrnament.Loop - 1;
           end;
-            Ornaments.ShownOrnament.Items[254]:=0;
 
-            Edit13.Text:= IntToStr(Ornaments.ShownOrnament.Length);
-            Edit12.Text:= IntToStr(Ornaments.ShownOrnament.Loop);
+          for ff := ii to 62 do
+          begin
+            Ornaments.ShownOrnament.Items[ff] := Ornaments.ShownOrnament.Items[ff + 1];
+          end;
+          Ornaments.ShownOrnament.Items[254] := 0;
 
-            HideCaret(Ornaments.Handle);
-            Ornaments.RedrawOrnaments(0);
-            ShowCaret(Ornaments.Handle);
+          Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+          Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
+
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
         end;
       VK_INSERT:
         if (ssCtrl in Shift) and (ssShift in Shift) then
@@ -4326,46 +4841,48 @@ begin
         else
         begin
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
           if (ll < 255) and (ii <= (ll)) then
           begin
-            Ornaments.ShownOrnament.Length := Ornaments.ShownOrnament.Length +1;
-            if Ornaments.ShownOrnament.Loop >= ii then Ornaments.ShownOrnament.Loop:= Ornaments.ShownOrnament.Loop +1;
-           end;
-
-          for ff:= 253 downto ii do
-          begin
-            Ornaments.ShownOrnament.Items[ff+1]:= Ornaments.ShownOrnament.Items[ff];
+            Ornaments.ShownOrnament.Length := Ornaments.ShownOrnament.Length + 1;
+            if Ornaments.ShownOrnament.Loop >= ii then Ornaments.ShownOrnament.Loop := Ornaments.ShownOrnament.Loop + 1;
           end;
-            Edit13.Text:= IntToStr(Ornaments.ShownOrnament.Length);
-            Edit12.Text:= IntToStr(Ornaments.ShownOrnament.Loop);
 
-            HideCaret(Ornaments.Handle);
-            Ornaments.RedrawOrnaments(0);
-            ShowCaret(Ornaments.Handle);
+          for ff := 253 downto ii do
+          begin
+            Ornaments.ShownOrnament.Items[ff + 1] := Ornaments.ShownOrnament.Items[ff];
+          end;
+          Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+          Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
+
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
 
         end;
-        else
-        begin
-          if Key >= 256 then
-           exit;
-          ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+    else
+      begin
+        if Key >= 256 then
+          exit;
+        ValidateOrnament(OrnNum);
+        GetOrnParams(ll, ii, cc);
 
-          if MainForm.NoteKeys[Key] >= 0 then
-          begin
+        if MainForm.NoteKeys[Key] >= 0 then
+        begin
           Ornaments.ShownOrnament.Items[ii] := MainForm.NoteKeys[Key];
           HideCaret(Ornaments.Handle);
           Ornaments.RedrawOrnaments(0);
           ShowCaret(Ornaments.Handle);
-          end;
+
         end;
+      end;
     end
   else if Shift = [ssCtrl] then
     case Key of
       VK_NEXT, VK_END:
         begin
+          selectionOff();
           Ornaments.CursorY := OrnNRaw - 1;
           Ornaments.CursorX := (OrnNCol - 1) * 7;
           SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
@@ -4377,6 +4894,7 @@ begin
         end;
       VK_PRIOR, VK_HOME:
         begin
+          selectionOff();
           Ornaments.CursorY := 0;
           Ornaments.CursorX := 0;
           SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
@@ -4389,20 +4907,20 @@ begin
       VK_ADD:
         begin
         //next ornament
-        if StrToInt(Edit11.Text) in [1..14] then
-        begin
-          ChangeOrnament(StrToInt(Edit11.Text)+1);
-          Edit11.Text:= IntToStr((StrToInt(Edit11.Text)+1));
-        end;
+          if StrToInt(Edit11.Text) in [1..14] then
+          begin
+            ChangeOrnament(StrToInt(Edit11.Text) + 1);
+            Edit11.Text := IntToStr((StrToInt(Edit11.Text) + 1));
+          end;
         end;
       VK_SUBTRACT:
         begin
         //previous sample
-        if StrToInt(Edit11.Text) in [2..15] then
-        begin
-          ChangeSample(StrToInt(Edit11.Text)-1);
-          Edit11.Text:= IntToStr((StrToInt(Edit11.Text)-1));
-        end;
+          if StrToInt(Edit11.Text) in [2..15] then
+          begin
+            ChangeSample(StrToInt(Edit11.Text) - 1);
+            Edit11.Text := IntToStr((StrToInt(Edit11.Text) - 1));
+          end;
         end;
 {      VK_INSERT:
         begin
@@ -4431,89 +4949,191 @@ begin
         end;}
       VK_INSERT:
         begin
-          ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
-
-          for ff:= 0 to (Ornaments.ShownOrnament.Length - Ornaments.ShownOrnament.Loop) do
-          begin
-            MainForm.BuffOrnament.Items[ff]:=
-            Ornaments.ShownOrnament.items[ff + Ornaments.ShownOrnament.Loop];
-          end;
-
-          MainForm.BuffOrnament.Loop:= 0;
-          MainForm.BuffOrnament.Length:= Ornaments.ShownOrnament.Length - Ornaments.ShownOrnament.Loop;
+          copyOrnamentToBuffer();
         end;
 
       Ord('A'):
         begin
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
-          Ornaments.ShownOrnament.Length:=255;
-          Ornaments.ShownOrnament.Loop:=0;
+          Ornaments.selEnd:= 255;
+          Ornaments.selStart := 0;
 
           HideCaret(Ornaments.Handle);
           Ornaments.RedrawOrnaments(0);
           ShowCaret(Ornaments.Handle);
         end;
-
-
-
     end
   else if Shift = [ssShift] then
     case Key of
       $BB:
         DoTogglePlus;
-            VK_HOME:
+      VK_HOME:
         begin
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
-         if (Ornaments.ShownOrnament.Length > 0) and (ii < ll) then
+          if (Ornaments.ShownOrnament.Length > 0) and (ii < ll) then
           begin
-            Ornaments.ShownOrnament.Loop:= ii;
+            Ornaments.ShownOrnament.Loop := ii;
           end;
-            Edit13.Text:= IntToStr(Ornaments.ShownOrnament.Length);
-            Edit12.Text:= IntToStr(Ornaments.ShownOrnament.Loop);
+          Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+          Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
 
-            HideCaret(Ornaments.Handle);
-            Ornaments.RedrawOrnaments(0);
-            ShowCaret(Ornaments.Handle);
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
         end;
       VK_END:
         begin
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
-          Ornaments.ShownOrnament.Length:= ii+1;
+          Ornaments.ShownOrnament.Length := ii + 1;
           if Ornaments.ShownOrnament.Loop > Ornaments.ShownOrnament.Length then Ornaments.ShownOrnament.Loop := ii;
 
-            Edit13.Text:= IntToStr(Ornaments.ShownOrnament.Length);
-            Edit12.Text:= IntToStr(Ornaments.ShownOrnament.Loop);
+          Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+          Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
 
-            HideCaret(Ornaments.Handle);
-            Ornaments.RedrawOrnaments(0);
-            ShowCaret(Ornaments.Handle);
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
         end;
       VK_INSERT:
         begin
           ValidateOrnament(OrnNum);
-          GetOrnParams(ll,ii,cc);
+          GetOrnParams(ll, ii, cc);
 
-          for ff:= MainForm.BuffOrnament.Loop to MainForm.BuffOrnament.Length do
+          for ff := MainForm.BuffOrnament.Loop to MainForm.BuffOrnament.Length do
           begin
-            if ff+ii <= 254 then
+            if ff + ii <= 254 then
             begin
-            Ornaments.ShownOrnament.Items[ff+ii]:= MainForm.BuffOrnament.Items[ff];
+              Ornaments.ShownOrnament.Items[ff + ii] := MainForm.BuffOrnament.Items[ff];
             //Ornaments.ShownOrnament.Length:= ff;
+              if ff+ii >= Ornaments.ShownOrnament.Length then
+                 Ornaments.ShownOrnament.Length:= ff+ii+1;
             end;
           end;
 
-            Edit13.Text:= IntToStr(Ornaments.ShownOrnament.Length);
-            Edit12.Text:= IntToStr(Ornaments.ShownOrnament.Loop);
-            HideCaret(Ornaments.Handle);
-            Ornaments.RedrawOrnaments(0);
-            ShowCaret(Ornaments.Handle);
+          Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+          Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
+        end;
+      VK_DOWN:
+        begin
+          if Ornaments.isSelecting = False then
+          begin
+          GetOrnParams(ll, ii,cc);
+          Ornaments.selStart:=ii;
+          Ornaments.selEnd:=ii+1;
+          Ornaments.isSelecting:= True
+          end;
+
+          if (Ornaments.CursorY < Ornaments.NOfLines - 1) then
+          begin
+            Inc(Ornaments.CursorY);
+            SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
+              Ornaments.CursorY);
+          end
+          else if Ornaments.ShownFrom < MaxSamLen - Ornaments.NOfLines then
+          begin
+            Inc(Ornaments.ShownFrom);
+
+          end;
+
+          if Ornaments.isSelecting = True then
+          begin
+          GetOrnParams(ll, ii,cc);
+          Ornaments.selEnd:=ii+1;
+          end;
+
+          if Ornaments.selEnd < Ornaments.selStart then
+          begin
+            ii:= Ornaments.selEnd;
+            Ornaments.selEnd:= Ornaments.selStart;
+            Ornaments.selStart:= ii;
+          end;
+
+         HideCaret(Ornaments.Handle);
+         Ornaments.RedrawOrnaments(0);
+         ShowCaret(Ornaments.Handle);
+
+        end;
+      VK_UP:
+        begin
+          if Ornaments.isSelecting = False then
+          begin
+          GetOrnParams(ll, ii,cc);
+          Ornaments.selStart:=ii;
+          Ornaments.selEnd:=ii+1;
+          Ornaments.isSelecting:= True
+          end;
+
+          if Ornaments.selEnd = Ornaments.selStart then Inc(Ornaments.selEnd);
+
+          if (Ornaments.CursorY > 0) then
+          begin
+            Dec(Ornaments.CursorY);
+            SetCaretPos(Ornaments.CelW * (3 + Ornaments.CursorX), Ornaments.CelH *
+              Ornaments.CursorY);
+          end
+          else if Ornaments.ShownFrom > 0 then
+          begin
+            Dec(Ornaments.ShownFrom);
+
+          end;
+
+          if Ornaments.isSelecting = True then
+          begin
+          GetOrnParams(ll, ii,cc);
+
+          Ornaments.selStart:=ii;
+          end;
+
+          if Ornaments.selEnd < Ornaments.selStart then
+          begin
+            ii:= Ornaments.selEnd;
+            Ornaments.selEnd:= Ornaments.selStart;
+            Ornaments.selStart:= ii;
+          end;
+
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
+
+        end;
+
+      else
+        begin
+         Ornaments.isLineTesting:= True;
+         Shift:=[];
+         OrnamentTestLine.KeyPressed:=0;
+         OrnamentTestLine.CursorX:=8;
+         if (Key <> VK_LEFT) and (Key <> VK_RIGHT) then
+         begin
+           OrnamentTestLine.TestLineKeyDown(Sender, Key, Shift);
+         end;
+        end;
+    end
+  else if Shift = [ssShift, ssCtrl] then
+    begin
+        if Key >= 256 then
+          exit;
+        ValidateOrnament(OrnNum);
+        GetOrnParams(ll, ii, cc);
+
+        if (MainForm.NoteKeys[Key]+12 >= 0 )and
+           (MainForm.NoteKeys[Key]+12 <= 96 )
+            then
+        begin
+          Ornaments.ShownOrnament.Items[ii] := MainForm.NoteKeys[Key]+12;
+          HideCaret(Ornaments.Handle);
+          Ornaments.RedrawOrnaments(0);
+          ShowCaret(Ornaments.Handle);
+
         end;
     end;
 end;
@@ -4664,8 +5284,8 @@ begin
     else
       l := ShownSample.Length;
     i := ShownFrom + y;
-    if i >= l then
-      exit;
+    {if i >= l then
+      exit;} // рисуем семпл где угодно
     SongChanged := True;
     ValidateSample2(SamNum);
     New(ST);
@@ -4710,10 +5330,22 @@ begin
       if ShownSample = nil then
         l := 1
       else
-        l := ShownSample.Length;
+      l := ShownSample.Length;
       i := ShownFrom + y1;
-      if i < l then
+      if i > l then
       begin
+        ShownSample.Length:=i+1;
+          Edit9.Text := IntToStr(ShownSample.Length);
+          Edit10.Text := IntToStr(ShownSample.Loop);
+
+          ShownSample.Items[i].Mixer_Ton:=True;
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
+
+      end;
+
         ValidateSample2(SamNum);
         New(ST);
         ST^ := ShownSample.Items[i];
@@ -4753,7 +5385,7 @@ begin
           if Focused then
             ShowCaret(Handle)
         end
-      end
+      //end
     end
   end;
   if Samples.Focused then
@@ -4775,11 +5407,30 @@ end;
 
 procedure TMDIChild.SamplesMouseMove(Sender: TObject; Shift: TShiftState; X,
   Y: Integer);
+var
+  x1, y1, i, l: integer;
+
 begin
   if Shift = [ssRight] then
   begin
     Samples.InputSNumber := 0;
-    SamplesVolMouse(X div Samples.CelW - 3, Y div Samples.CelH)
+    SamplesVolMouse(X div Samples.CelW - 3, Y div Samples.CelH);
+
+    x1 := X div Samples.CelW - 3;
+    y1 := Y div Samples.CelH;
+    i := Samples.ShownFrom + y1;
+      if i >= Samples.ShownSample.Length then
+      begin
+        Samples.ShownSample.Length:=i+1;
+          Edit9.Text := IntToStr(Samples.ShownSample.Length);
+          Edit10.Text := IntToStr(Samples.ShownSample.Loop);
+
+          Samples.ShownSample.Items[i].Mixer_Ton:=True;
+
+          HideCaret(Samples.Handle);
+          Samples.RedrawSamples(0);
+          ShowCaret(Samples.Handle);
+      end;
   end
 end;
 
@@ -4840,7 +5491,7 @@ begin
       CALoadPattern, CAInsertPatternFromClipboard, CAPatternInsertLine,
         CAPatternDeleteLine,
         CAPatternClearLine, CAPatternClearSelection, CATransposePattern,
-          CATracksManagerCopy,
+        CATracksManagerCopy,
         CAExpandCompressPattern:
         Dispose(ChangeList[i].Pattern);
       CADeletePosition, CAInsertPosition:
@@ -4901,7 +5552,7 @@ end;
 function TMDIChild.LoadTrackerModule(Name: string; var VTMP2: PModule): boolean;
 const
   ers: array[1..6] of string =
-    ('Module not found',
+  ('Module not found',
     'Syntax error',
     'Parameter out of range',
     'Unexpected end of file',
@@ -4915,7 +5566,7 @@ var
   AuthN, SongN: string;
 
   function Convert(FType: Available_Types; VTMP: PModule; var VTMP2: PModule):
-    boolean;
+      boolean;
   begin
     Result := True;
     case FType of
@@ -5526,6 +6177,7 @@ procedure TMDIChild.SelectPosition2(ps: integer);
 var
   sel: TGridRect;
 begin
+  if VTMP = nil then exit;
   if VTMP.Positions.Length = 0 then
     exit;
   if StringGrid1.Selection.Left <> ps then
@@ -5700,7 +6352,8 @@ end;
 
 procedure TMDIChild.Edit6Change(Sender: TObject);
 begin
-  SetInitDelay(UpDown3.Position)
+  SetInitDelay(UpDown3.Position);
+  edtBPM.Text:= 'BPM: ' + FloatToStr((Interrupt_Freq*60 / (UpDown3.Position * 4))/1000);
 end;
 
 procedure TMDIChild.UpDown3ChangingEx(Sender: TObject;
@@ -5712,31 +6365,31 @@ begin
     SetInitDelay(NewValue)
 end;
 
-procedure change_Envelope_when_toneTableChanged(VTMZ:PModule;oldT:integer; newT:integer);
-var coeff:Real;
-    ii,ff:Integer;
-    ENote,oldE,e:Integer;
-    Notefreq:Integer;
+procedure change_Envelope_when_toneTableChanged(VTMZ: PModule; oldT: integer; newT: integer);
+var coeff: Real;
+  ii, ff: Integer;
+  ENote, oldE, e: Integer;
+  Notefreq: Integer;
 begin
-  for ff:= -1 to 84 do
+  for ff := -1 to 84 do
   begin
     if VTMZ.Patterns[ff] = nil then Continue;
-    for ii:= 0 to VTMZ.Patterns[ff].Length do
+    for ii := 0 to VTMZ.Patterns[ff].Length do
     begin
 
-         oldE:= VTMZ.Patterns[ff].Items[ii].Envelope;
-         coeff := GetNoteFreq(oldT,0) / GetNoteFreq(NewT,0);
-         ENote:= GetNoteByEnvelope2(oldT,olde);
-         if ENote = 0 then
-            begin
-            VTMZ.Patterns[ff].Items[ii].Envelope:= Round (oldE / coeff);
-            end
-         else
-            begin
-             Notefreq:= GetNoteFreq(newT,ENote);
-             e:= Round(Notefreq / 16);
-             VTMZ.Patterns[ff].Items[ii].Envelope:=e;
-            end;
+      oldE := VTMZ.Patterns[ff].Items[ii].Envelope;
+      coeff := GetNoteFreq(oldT, 0) / GetNoteFreq(NewT, 0);
+      ENote := GetNoteByEnvelope2(oldT, olde);
+      if ENote = 0 then
+      begin
+        VTMZ.Patterns[ff].Items[ii].Envelope := Round(oldE / coeff);
+      end
+      else
+      begin
+        Notefreq := GetNoteFreq(newT, ENote);
+        e := Round(Notefreq / 16);
+        VTMZ.Patterns[ff].Items[ii].Envelope := e;
+      end;
     end;
   end;
 end;
@@ -5748,13 +6401,13 @@ begin
   AllowChange := NewValue in [0..4];
   if AllowChange and (VTMP.Ton_Table <> NewValue) then
   begin
-    change_Envelope_when_toneTableChanged(VTMP,VTMP.Ton_Table,NewValue);
+    change_Envelope_when_toneTableChanged(VTMP, VTMP.Ton_Table, NewValue);
     SongChanged := True;
     AddUndo(CAChangeToneTable, VTMP.Ton_Table, NewValue);
     VTMP.Ton_Table := NewValue
 
   end;
-   Tracks.RedrawTracks(0);
+  Tracks.RedrawTracks(0);
   if Tracks.Focused then
     ShowCaret(Tracks.Handle);
   if Active then
@@ -5771,7 +6424,7 @@ procedure TMDIChild.Edit7Change(Sender: TObject);
 begin
   if VTMP.Ton_Table <> UpDown4.Position then
   begin
-    change_Envelope_when_toneTableChanged(VTMP,VTMP.Ton_Table,UpDown4.Position);
+    change_Envelope_when_toneTableChanged(VTMP, VTMP.Ton_Table, UpDown4.Position);
     SongChanged := True;
     AddUndo(CAChangeToneTable, VTMP.Ton_Table, UpDown4.Position);
     VTMP.Ton_Table := UpDown4.Position
@@ -6475,29 +7128,29 @@ begin
       Ord('R'):
         ToggleAutoStep;
       192:
-      begin
+        begin
 {        case PageControl1.TabIndex of
           0: PageControl1.TabIndex:=1;
           1: PageControl1.TabIndex:=0;
         else ;
           PageControl1.TabIndex:=1;
         end;                       }
-        PageControl1.TabIndex:=0;
-        if Tracks.CanFocus then
-           Tracks.SetFocus
-      end;
+          PageControl1.TabIndex := 0;
+          if Tracks.CanFocus then
+            Tracks.SetFocus
+        end;
       Ord('1'):
-      begin
-        PageControl1.TabIndex:=1;
-        if Samples.CanFocus then
-           Samples.SetFocus
-      end;
+        begin
+          PageControl1.TabIndex := 1;
+          if Samples.CanFocus then
+            Samples.SetFocus
+        end;
       Ord('2'):
-      begin
-        PageControl1.TabIndex:=2;
-        if Ornaments.CanFocus then
-           Ornaments.SetFocus
-      end;
+        begin
+          PageControl1.TabIndex := 2;
+          if Ornaments.CanFocus then
+            Ornaments.SetFocus
+        end;
     end
   end
   else if Shift = [ssCtrl, ssAlt] then
@@ -7413,11 +8066,11 @@ begin
               ShownPattern.Items[Y1].Channel[c].Additional_Command.Delay := 0;
             19, 33, 47:
               ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter :=
-              ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter and
+                ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter and
                 15;
             20, 34, 48:
               ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter :=
-              ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter and
+                ShownPattern.Items[Y1].Channel[c].Additional_Command.Parameter and
                 $F0;
           end;
         if m >= 48 then
@@ -7552,9 +8205,9 @@ begin
         CAChangeSample, CAChangeEnvelopeType, CAChangeOrnament, CAChangeVolume,
         CAChangeSpecialCommandNumber, CAChangeSpecialCommandDelay,
         CAChangeSpecialCommandParameter, CALoadPattern,
-          CAInsertPatternFromClipboard,
+        CAInsertPatternFromClipboard,
         CAPatternInsertLine, CAPatternDeleteLine, CAPatternClearLine,
-          CAPatternClearSelection,
+        CAPatternClearSelection,
         CATransposePattern, CATracksManagerCopy, CAExpandCompressPattern:
         begin
           OldParams.prm.Value := par1;
@@ -7794,7 +8447,7 @@ begin
           CALoadPattern, CAInsertPatternFromClipboard, CAPatternInsertLine,
             CAPatternDeleteLine,
             CAPatternClearLine, CAPatternClearSelection, CATransposePattern,
-              CATracksManagerCopy,
+            CATracksManagerCopy,
             CAExpandCompressPattern:
             begin
               SongChanged := True;
@@ -7999,8 +8652,8 @@ begin
   for i := 1 to 31 do
     TogSam[i].Checked := (VTMP.Samples[i] = nil) or VTMP.Samples[i].Enabled;
   SetToolsPattern;
-   if Tracks.CanFocus then
-      Tracks.SetFocus
+  if Tracks.CanFocus then
+    Tracks.SetFocus
 end;
 
 function TMDIChild.PrepareTSString(TSBut: TSpeedButton; s: string): string;
@@ -8035,7 +8688,7 @@ begin
     end;
   if (TSSel.ShowModal = mrOk) and (TSSel.ListBox1.ItemIndex >= 0) and
     (TMDIChild(TSSel.ListBox1.Items.Objects[TSSel.ListBox1.ItemIndex]) <> Self)
-      then
+    then
   begin
     TSBut.Caption := PrepareTSString(TSBut,
       TSSel.ListBox1.Items[TSSel.ListBox1.ItemIndex]);
@@ -8095,4 +8748,3 @@ begin
     SetToolsPattern;
 end;
 end.
-

@@ -26,6 +26,7 @@ type
     BigCaret: boolean;
     KeyPressed: integer;
     Clicked: boolean;
+    CurrentMidiNote:Integer;
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure ShowSelection(DC: HDC);
@@ -50,6 +51,9 @@ type
     TestOct: integer;
     TestSample: boolean;
     ParWind: TForm;
+    CurrentMidiNote:Integer;
+    NoteCounter: Integer;
+    Arp :array[0..96] of Integer;
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure RedrawTestLine(DC: HDC);
@@ -57,6 +61,9 @@ type
     procedure CreateMyCaret;
     procedure TestLineMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
+
+    procedure TestLineMidiOn(note: Integer);
+    procedure TestLineMidiOff(note: Integer);
     procedure TestLineKeyDown(Sender: TObject; var Key: Word;
       Shift: TShiftState);
     procedure TestLineKeyUp(Sender: TObject; var Key: Word;
@@ -74,6 +81,7 @@ type
     isSelecting :Boolean;
     selStart, selEnd: Integer;
     isLineTesting:bool;
+    CurrentMidiNote:Integer;
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure RedrawSamples(DC: HDC);
@@ -91,7 +99,7 @@ type
     isSelecting: Boolean;
     selStart, selEnd: Integer;
     isLineTesting:bool;
-
+    CurrentMidiNote:Integer;
     constructor Create(AOwner: TComponent); override;
     procedure DefaultHandler(var Message); override;
     procedure RedrawOrnaments(DC: HDC);
@@ -285,6 +293,16 @@ type
     Label3: TLabel;
     chk1: TCheckBox;
     edtBPM: TEdit;
+
+    procedure TLArpMidiOn(note: Integer);
+    procedure TLArpMidiOff(note: Integer);
+
+    procedure OrnamentsMidiNoteOn(note:Byte);
+    procedure OrnamentsMidiNoteOff(note:Byte);
+    procedure SamplesMidiNoteOn(note:Byte);
+    procedure SamplesMidiNoteOff(note:Byte);
+    procedure TracksMidiNoteOn(note:Byte);
+    procedure TracksMidiNoteOff(note:Byte);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure FormCreate(Sender: TObject);
     procedure TracksMoveCursorMouse(X, Y: integer; Sel, Mv, ButRight: boolean);
@@ -515,7 +533,13 @@ type
 var
   PlayingWindow: array[1..MaxNumberOfSoundChips] of TMDIChild;
 
+    CurrentMidiNote:Integer;
+    NoteCounter: Integer;
+    MaxNote:Integer;
+    Arp :array[0..96] of Integer;
+  
 implementation
+
 
 uses Main, options, ShellApi, selectts, TglSams, GlbTrn, TrkMng;
 
@@ -538,7 +562,6 @@ begin
 FreeVTMP(VTMP);
 inherited;
 end;}
-
 
 procedure TMDIChild.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
@@ -786,7 +809,8 @@ begin
   KeyPressed := 0;
   Font := MainForm.NewTrack_Font;
   TestOct := 4;
-  CursorX := 8
+  CursorX := 8;
+  NoteCounter :=0;
 end;
 
 procedure TMDIChild.CreateTestLines;
@@ -922,6 +946,8 @@ begin
   Ornaments.OnKeyDown := OrnamentsKeyDown;
   Ornaments.OnKeyUp := OrnamentsKeyUp;
   Ornaments.OnMouseDown := OrnamentsMouseDown;
+  NoteCounter:=0;
+  MaxNote:=0;
 end;
 
 procedure TTracks.DefaultHandler(var Message);
@@ -1541,6 +1567,7 @@ const
   NoteTabs: array[0..2] of integer =
   (8, 22, 36);
   NotePoses = [8, 22, 36];
+  ChanPoses = [8,12..20, 22,26..34, 36,40..48];  
   EnvelopePoses = [0..3];
   SamTabs: array[0..2] of integer =
   (12, 26, 40);
@@ -1839,8 +1866,199 @@ begin
   end;
 end;
 
-{Tracks MIDI In}
+procedure TMDIChild.TLArpMidiOn(note: Integer);
+begin
+    NoteCounter := NoteCounter+1;
+    Arp[note] := 1;
+    OrnamentTestLine.TestLineMidiOn(note);
+    if MaxNote < NoteCounter then MaxNote :=NoteCounter;
+end;
+procedure TMDIChild.TLArpMidiOff(note: Integer);
+var
+  f: Integer;
+  min, len: Integer;
+  Orn :array[0..96] of Integer;
+begin
+    NoteCounter := NoteCounter-1;
+    OrnamentTestLine.TestLineMidiOff(note);
+    if (NoteCounter <> 0) or (MaxNote < 3) then Exit;
+    min := 96;
+    len := 0;
+    for f:= 0 to 96 do
+    begin
+      if Arp[f] = 1 then
+      begin
+        if min > f then min :=f;
+        Orn[len] := f;
+        len := len + 1;
+      end;
+    end;
 
+    for f:= 0 to len - 1 do
+    begin
+        Orn[f] := Orn[f] - min;
+    end;
+
+    ValidateOrnament(OrnNum);
+
+    Ornaments.ShownOrnament.Length := len;
+    Ornaments.ShownOrnament.Loop := 0;
+    for f:= 0 to len-1 do
+    begin
+        Ornaments.ShownOrnament.Items[f]:=Orn[f];
+    end;
+
+    Edit13.Text := IntToStr(Ornaments.ShownOrnament.Length);
+    Edit12.Text := IntToStr(Ornaments.ShownOrnament.Loop);
+
+    HideCaret(Ornaments.Handle);
+    Ornaments.RedrawOrnaments(0);
+    ShowCaret(Ornaments.Handle);
+
+//clear Arp when done
+    for f:= 0 to 96 do
+    begin
+      Arp[f]:=0;
+    end;
+    MaxNote :=0;
+end;
+
+procedure TMDIChild.OrnamentsMidiNoteOn(note:Byte);
+begin
+    Ornaments.isLineTesting:= True;
+    OrnamentTestLine.KeyPressed:=0;
+    OrnamentTestLine.CursorX:=8;
+
+    if
+      TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note
+      >= 0 then
+     if not IsPlaying or (PlayMode = PMPlayLine) then
+        PlVars[1].ParamsOfChan[MidChan].Note :=
+          TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note;
+    TMDIChild(OrnamentTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(OrnamentTestLine.TestSample)].Channel[0].Note
+      := Note;
+    TMDIChild(OrnamentTestLine.ParWind).DoAutoEnv(-1, Ord(OrnamentTestLine.TestSample), 0);
+    HideCaret(Handle);
+    OrnamentTestLine.RedrawTestLine(0);
+    ShowCaret(Handle);
+    TMDIChild(OrnamentTestLine.ParWind).RestartPlayingLine(-Ord(OrnamentTestLine.TestSample) - 1);
+    Ornaments.CurrentMidiNote := note;
+end;
+procedure TMDIChild.OrnamentsMidiNoteOff(note:Byte);
+begin
+      if Ornaments.CurrentMidiNote <> note then Exit;
+      OrnamentTestLine.TestLineExit(Self);
+      Ornaments.isLineTesting:= False;
+end;
+procedure TMDIChild.SamplesMidiNoteOn(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+    Samples.isLineTesting:= True;
+    SampleTestLine.KeyPressed:=0;
+    SampleTestLine.CursorX:=8;
+
+    if
+      TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note
+      >= 0 then
+      if not IsPlaying or (PlayMode = PMPlayLine) then
+        PlVars[1].ParamsOfChan[MidChan].Note :=
+          TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note;
+    TMDIChild(SampleTestLine.ParWind).VTMP.Patterns[-1].Items[Ord(SampleTestLine.TestSample)].Channel[0].Note
+      := Note;
+
+    TMDIChild(SampleTestLine.ParWind).DoAutoEnv(-1, Ord(SampleTestLine.TestSample), 0);
+    HideCaret(Handle);
+    SampleTestLine.RedrawTestLine(0);
+    ShowCaret(Handle);
+    TMDIChild(SampleTestLine.ParWind).RestartPlayingLine(-Ord(SampleTestLine.TestSample) - 1);
+    Samples.CurrentMidiNote := note;
+//  end;
+end;
+
+procedure TMDIChild.SamplesMidiNoteOff(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+      if Samples.CurrentMidiNote <> note then Exit;
+      SampleTestLine.TestLineExit(Self);
+      Samples.isLineTesting:= False;
+//  end;
+end;
+
+procedure TMDIChild.TracksMidiNoteOn(note:Byte);
+var
+  i,j, n, y,e,old:Integer;
+begin
+  if (note < 0) or (note > 96) then Exit;
+  if Tracks.CursorX in ChanPoses then
+  begin
+    ValidatePattern2(PatNum);
+    i := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
+    if (i >= 0) and (i < Tracks.ShownPattern.Length) then
+    begin
+//    RemSel;
+      j := MainForm.ChanAlloc[(Tracks.CursorX - 8) div 14];
+      Tracks.CurrentMidiNote := note;
+      ChangeNote(PatNum, i, j, Note);
+      DoAutoEnv(PatNum, i, j);
+      HideCaret(Tracks.Handle);
+      if DoStep(i, True) then
+        ShowStat;
+      Tracks.RedrawTracks(0);
+      ShowCaret(Tracks.Handle);
+      RestartPlayingLine(i);
+    end;
+
+  end;
+  if Tracks.CursorX in EnvelopePoses then
+  begin
+    n := Note;
+    if n < 0 then
+      exit;
+    ValidatePattern2(PatNum);
+    y := Tracks.ShownFrom - Tracks.N1OfLines + Tracks.CursorY;
+
+    if (y >= 0) and (y < Tracks.ShownPattern.Length) then
+      e := round(GetNoteFreq(VTMP.Ton_Table, n) * AutoEnv0 / AutoEnv1 / 16);
+    begin
+      old := VTMP.Patterns[PatNum].Items[y].Envelope;
+      if not UndoWorking then
+      begin
+        AddUndo(CAChangeEnvelopePeriod, old, e);
+        ChangeList[ChangeCount - 1].Line := y;
+      end;
+      VTMP.Patterns[PatNum].Items[y].Envelope := e;
+      Tracks.CurrentMidiNote := note;
+      SongChanged := True;
+//    RemSel;
+//    Tracks.KeyPressed := Key;
+      HideCaret(Tracks.Handle);
+      if DoStep(y, True) then
+        ShowStat;
+      Tracks.RedrawTracks(0);
+      ShowCaret(Tracks.Handle);
+      RestartPlayingLine(y);
+    end;
+  end;
+end;
+
+procedure TMDIChild.TracksMidiNoteOff(note:Byte);
+begin
+//  if Tracks.KeyPressed = Key then
+//  begin
+    if Tracks.CurrentMidiNote <> note then Exit;
+    if IsPlaying and (PlayMode in [PMPlayLine, PMPlayPattern]) and
+      (PlayingWindow[1] = Self) then
+    begin
+      ResetPlaying;
+      PlayMode := PMPlayLine
+    end;
+    Tracks.KeyPressed := 0;
+//  end;
+end;
+
+{Tracks MIDI In}
 procedure TMDIChild.TracksKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 
@@ -1899,18 +2117,28 @@ procedure TMDIChild.TracksKeyDown(Sender: TObject; var Key: Word;
     len := Abs (epos - spos) * VTMP.Initial_Delay;
     diff := (Abs ((efreq - sfreq))) div len;
     if diff = 0 then diff := 1;
+
     if efreq > sfreq then
     begin
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandNumber, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Number,1);
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandDelay, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Delay,1);
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandParameter, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Parameter,diff);
+
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Number:=1;
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Delay :=1;
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Parameter :=diff;
     end
     else
     begin
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandNumber, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Number,2);
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandDelay, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Delay,1);
+//      if not UndoWorking then AddUndo(CAChangeSpecialCommandParameter, VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Parameter,diff);
+
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Number:=2;
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Delay :=1;
     VTMP.Patterns[PatNum].Items[spos].Channel[Chan].Additional_Command.Parameter :=diff;
     end;
+
     Tracks.RedrawTracks(0);
 //    snote := VTMP.Patterns[PatNum].items
 //   if (y >= 0) and (y < Tracks.ShownPattern.Length) then
@@ -2509,6 +2737,8 @@ begin
 
         end;
         StopAndRestart
+
+
 
       end
       else if Tracks.CursorX >= 22 then
@@ -3308,6 +3538,30 @@ begin
   end;
 end;
 
+
+procedure TTestLine.TestLineMidiOn(note: Integer);
+begin
+   if not IsPlaying or (PlayMode = PMPlayLine) then
+        PlVars[1].ParamsOfChan[MidChan].Note :=
+          TMDIChild(ParWind).VTMP.Patterns[-1].Items[Ord(TestSample)].Channel[0].Note;
+    TMDIChild(ParWind).VTMP.Patterns[-1].Items[Ord(TestSample)].Channel[0].Note
+      := Note;
+    TMDIChild(ParWind).DoAutoEnv(-1, Ord(TestSample), 0);
+    HideCaret(Handle);
+    RedrawTestLine(0);
+    ShowCaret(Handle);
+    TMDIChild(ParWind).RestartPlayingLine(-Ord(TestSample) - 1);
+
+    Self.CurrentMidiNote := note;
+end;
+procedure TTestLine.TestLineMidiOff(note: Integer);
+begin
+    if Self.CurrentMidiNote <> note then Exit;
+    if (PlayMode = PMPlayLine) and
+      IsPlaying and (PlayingWindow[1] = ParWind) then
+      ResetPlaying;
+    KeyPressed := 0
+end;
 procedure TTestLine.TestLineKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
 
@@ -3774,7 +4028,7 @@ var
           ValidateSample2(SamNum);
           if Samples.ShownSample.Length <= Samples.ShownFrom+ Samples.CursorY then
              Samples.ShownSample.Length:= Samples.ShownFrom+ Samples.CursorY+1;
-             
+
           DoNumber(NmVol)
         end
     end

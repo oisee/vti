@@ -12,7 +12,8 @@ interface
 
 uses Windows, SysUtils, Classes, Graphics, Forms, Controls, Menus,
   StdCtrls, Dialogs, Buttons, Messages, ExtCtrls, ComCtrls, StdActns,
-  ActnList, ToolWin, ImgList, AY, WaveOutAPI, trfuncs, grids, ChildWin;
+  ActnList, ToolWin, ImgList, AY, WaveOutAPI, trfuncs, grids, ChildWin,
+  MidiType, MidiIn;
 
 const
   UM_REDRAWTRACKS = WM_USER;
@@ -190,6 +191,7 @@ type
     ExpandTwice1: TMenuItem;
     Compresspattern1: TMenuItem;
     Merge1: TMenuItem;
+    midiin1: TMidiInput;
     procedure AddWindowListItem(Child: TMDIChild);
     procedure DeleteWindowListItem(Child: TMDIChild);
     procedure FileNew1Execute(Sender: TObject);
@@ -286,6 +288,7 @@ type
     procedure ExpandTwice1Click(Sender: TObject);
     procedure Compresspattern1Click(Sender: TObject);
     procedure Merge1Click(Sender: TObject);
+    procedure midiin1MidiInput(Sender: TObject);
   private
     { Private declarations }
     procedure CreateMDIChild(const Name: string);
@@ -483,6 +486,11 @@ procedure TMainForm.FormCreate(Sender: TObject);
 var
   i: integer;
 begin
+  if midiin1.NumDevs > 0 then
+  begin
+    midiin1.OpenAndStart;
+  end;
+
   WinCount := 0;
 
   TrkClBk := GetSysColor(COLOR_WINDOW);
@@ -2743,6 +2751,85 @@ begin
   TMDIChild(ActiveMDIChild).Tracks.PasteFromClipboard(True);
 end;
 
+
+procedure TMainForm.midiin1MidiInput(Sender: TObject);
+var
+  eve : TMyMidiEvent;
+  mess, data1, data2: byte;
+  note:integer;
+  shiftState: TShiftState;
+  i, count: Integer;
+const
+  NoteOn  =144;
+  NoteOff =128;
+
+begin
+  count := midiin1.MessageCount;
+  if count = 0 then Exit;
+  for i:= 1 to count do
+  begin
+    eve := midiin1.GetMidiEvent;
+    mess := eve.MidiMessage and $F0;
+    data1 := eve.Data1;
+    data2 := eve.Data2;
+    if  (data2 = 0) and (mess = NoteOn) then mess := NoteOff;
+    note:= data1 - 24;
+    if note > 95 then note := 95;
+    if note <= 0 then note := 0;
+    if MDIChildCount = 0 then Break;
+    if mess = NoteOn then
+    with TMDIChild(ActiveMDIChild) do
+    begin
+      if Tracks.Focused then
+      begin
+         TracksMidiNoteOn(note);
+      end;
+      if Samples.Focused then
+      begin
+        SamplesMidiNoteOn(note);
+      end;
+      if SampleTestLine.Focused then
+      begin
+         SampleTestLine.TestLineMidiOn(note);
+      end;
+      if Ornaments.Focused then
+      begin
+        OrnamentsMidiNoteOn(note);
+      end;
+      if OrnamentTestLine.Focused then
+      begin
+//         OrnamentTestLine.
+          TLArpMidiOn(note);
+      end;
+    end;
+
+    if mess = NoteOff then
+    with TMDIChild(ActiveMDIChild) do
+    begin
+     if Tracks.Focused then
+     begin
+         TracksMidiNoteOff(note);
+     end;
+     if Samples.Focused then
+     begin
+        SamplesMidiNoteOff(note);
+     end;
+     if SampleTestLine.Focused then
+     begin
+        SampleTestLine.TestLineMidiOff(note);
+     end;
+     if Ornaments.Focused then
+     begin
+        OrnamentsMidiNoteOff(note);
+     end;
+     if OrnamentTestLine.Focused then
+     begin
+//       OrnamentTestLine.
+         TLArpMidiOff(note);
+     end;
+  end;
+  end;
+end;
 
 end.
 
